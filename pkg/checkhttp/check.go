@@ -12,12 +12,14 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/dustin/go-humanize"
+	"github.com/go-gost/x/ctx"
 	"github.com/sni/go-flags"
 )
 
@@ -62,7 +64,7 @@ type commandOpts struct {
 	RegexStr            string        `long:"regex" description:"Search page for case-sensitive regex string"`
 	EregexStr           string        `long:"eregex" descirpition:"Search page for case-insensitive regex string"`
 	ShowBody            bool          `long:"show-body" description:"Print body content bellow status line"`
-	Follow              string        `long:"follow" description:"Redirection options: ok, warning, critical, follow, sticky, stickyport"`
+	Follow              string        `long:"follow" description:"Redirection method" choice:"ok" choice:"warning" choice:"critical" choice:"follow" choice:"sticky" choice:"stickyport"`
 	bufferSize          uint64
 	expectByte          []byte
 }
@@ -225,6 +227,198 @@ func (e *reqError) Code() int {
 	return e.code
 }
 
+type RequestMetadata struct {
+	req      *http.Request
+	res      *http.Response
+	duration time.Duration
+	buffer   *capWriter
+	body     string
+	// if a follow up request was made due redirections
+	followup *RequestMetadata
+}
+
+// Helper function to extract everything from *http.Request
+func performHttpRequest(req *http.Request, client *http.Client, opts commandOpts) (metadata *RequestMetadata, err error) {
+	if opts.Verbose {
+		reqDump, _ := httputil.DumpRequest(req, true)
+		log.Printf("request:\n%s", reqDump)
+	}
+
+	start := time.Now()
+	res, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("Error when performing request: %s", err.Error())
+	}
+
+	if opts.Verbose {
+		resDump, _ := httputil.DumpResponse(res, true)
+		log.Printf("response:\n%s", resDump)
+	}
+
+	buffer := &capWriter{
+		Cap:       opts.bufferSize,
+		NoDiscard: opts.NoDiscard,
+	}
+	defer res.Body.Close()
+	_, err = io.Copy(buffer, res.Body)
+	body := string(buffer.Bytes())
+
+	if err != nil {
+		return nil, fmt.Errorf("Error when copying body buffer: %s", err.Error())
+	}
+
+	duration := time.Since(start)
+
+	return &RequestMetadata{
+		req,
+		res,
+		duration,
+		buffer,
+		body,
+		nil,
+	}, nil
+
+}
+
+// If a followup request is necessary, return it with err nil
+// If a folllowup request is necessary and can not be generated, return nil with non-nil err
+// If the function can return immediately
+func generateFollowupRequest(ctx ctx.Context, opts commandOpts, res *http.Response, body string) (followup *http.Request, followupGenerationErr error, err *reqError) {
+	createFollowupRequest := false
+
+	// some HTTP codes force the request to be converted to a GET request.
+	changeHTTPMethodToGet := false
+
+	var locationHeader string
+	useLocationHeader := false
+
+	// some Requests give alternative links in the body.
+	searchLinksInBody := false
+
+	// https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Redirections
+	switch {
+	case 200 <= res.StatusCode && res.StatusCode < 300:
+		break
+	case res.StatusCode == http.StatusMultipleChoices:
+		// have to read the status body
+	case res.StatusCode == http.StatusMovedPermanently:
+		createFollowupRequest = true
+		changeHTTPMethodToGet = true
+	case res.StatusCode == http.StatusFound:
+		createFollowupRequest = true
+		changeHTTPMethodToGet = true
+	case res.StatusCode == http.StatusSeeOther:
+		changeHTTPMethodToGet = true
+		createFollowupRequest = true
+	case res.StatusCode == http.StatusNotModified:
+		// cached response is still valid
+		createFollowupRequest = false
+	case res.StatusCode == http.StatusTemporaryRedirect:
+		// web site is not available
+		useLocationHeader := true
+	case res.StatusCode == http.StatusPermanentRedirect:
+		// method and body not changed
+		// TODO
+	default:
+		return nil, nil, nil
+	}
+
+	// use the same context and options to build the followup, but modify it based on redirect
+	followup, followupGenerationErr = buildRequest(ctx, opts)
+	if followupGenerationErr != nil {
+		return nil, fmt.Errorf("Error when building followup request: %s", err.Error()), nil
+	}
+
+	if useLocationHeader {
+		locationHeader = res.Header.Get("Location")
+
+		url, urlParseErr := url.Parse(locationHeader)
+		if urlParseErr != nil {
+			return nil, fmt.Errorf("Error when parsing redirection the url: %s", err.Error()), nil
+		}
+		followup.URL = url
+		followup.Host = url.Host
+	}
+
+	if changeHTTPMethodToGet {
+		followup.Method = "GET"
+	}
+
+}
+
+// Check the body of the response for patterns.
+// If a status code / byte sequence / regex is wanted and is not present return an error.
+// If they are present, add them to the list of matches.
+func searchForPatterns(bodyBytes *capWriter, bodyString string, proto string, status string, opts commandOpts) (matches []string, err *reqError) {
+	statusLine := fmt.Sprintf("%s %s", proto, status)
+
+	// matched portions in the page
+	if opts.Expect != "" {
+		m := expectedStatusCode(opts, status)
+		if m == "" {
+			return []string{}, &reqError{
+				fmt.Sprintf("HTTP CRITICAL - Invalid HTTP response received from host on port %d: %s", opts.Port, statusLine),
+				CRITICAL,
+			}
+		} else {
+			matches = append(matches, fmt.Sprintf(`Status line output "%s" matched "%s"`, statusLine, opts.Expect))
+		}
+	} else {
+		matches = append(matches, statusLine)
+	}
+
+	if len(opts.expectByte) > 0 {
+		if !bytes.Contains(bodyBytes.Bytes(), opts.expectByte) {
+			return matches, &reqError{
+				fmt.Sprintf(`HTTP CRITICAL - HTTP response body Not matched %q from host on port %d`, string(opts.expectByte), opts.Port),
+				CRITICAL,
+			}
+		} else {
+			matches = append(matches, fmt.Sprintf(`Response body matched %q`, string(opts.expectByte)))
+		}
+	}
+
+	if opts.RegexStr != "" {
+		re := regexp.MustCompile(opts.RegexStr)
+		if err != nil {
+			return matches, &reqError{
+				fmt.Sprintf(`Could not build case sensitive regex from option: '%s'`, opts.RegexStr),
+				UNKNOWN,
+			}
+		}
+		re_matched := re.FindStringSubmatch(bodyString)
+		if len(re_matched) == 0 {
+			return matches, &reqError{
+				fmt.Sprintf(`HTTP CRITICAL - HTTP response body did not match regex: '%s' from host: %s on port: %d`, opts.RegexStr, string(opts.expectByte), opts.Hostname, opts.Port),
+				CRITICAL,
+			}
+		}
+		matches = append(matches, re_matched...)
+	}
+
+	if opts.EregexStr != "" {
+		// as option add (%?) case insensitive
+		re, err := regexp.Compile("(?i)" + opts.EregexStr)
+		if err != nil {
+			return matches, &reqError{
+				fmt.Sprintf(`Could not build case insensitive regex from option: '%s'`, opts.EregexStr),
+				UNKNOWN,
+			}
+		}
+		re_matched := re.FindStringSubmatch(bodyString)
+		if len(re_matched) == 0 {
+			return matches, &reqError{
+				fmt.Sprintf(`HTTP CRITICAL - HTTP response body did not match regex: '%s' from host: %s on port: %d`, opts.RegexStr, string(opts.expectByte), opts.Hostname, opts.Port),
+				CRITICAL,
+			}
+		}
+		matches = append(matches, re_matched...)
+	}
+
+	return matches, nil
+}
+
+// Naemon-Like function that returns naemon errors, handles redirections, checks body content
 func request(ctx context.Context, client *http.Client, opts commandOpts) (string, *reqError) {
 	req, err := buildRequest(ctx, opts)
 	if err != nil {
@@ -234,85 +428,55 @@ func request(ctx context.Context, client *http.Client, opts commandOpts) (string
 		}
 	}
 
-	if opts.Verbose {
-		reqDump, _ := httputil.DumpRequest(req, true)
-		log.Printf("request:\n%s", reqDump)
-	}
-
-	start := time.Now()
-	res, err := client.Do(req)
+	meta, err := performHttpRequest(req, client, opts)
 	if err != nil {
 		return "", &reqError{
-			fmt.Sprintf("HTTP CRITICAL - Error in request: %v", err),
-			CRITICAL,
+			fmt.Sprintf("HTTP UNKNOWN - Error when performing request: %s", err),
+			UNKNOWN,
 		}
 	}
 
-	if opts.Verbose {
-		resDump, _ := httputil.DumpResponse(res, true)
-		log.Printf("response:\n%s", resDump)
+	reqErr := handleErroneusReturnCodes(meta.res)
+	if reqErr != nil {
+		return "", reqErr
 	}
 
-	b := &capWriter{
-		Cap:       opts.bufferSize,
-		NoDiscard: opts.NoDiscard,
-	}
-	defer res.Body.Close()
-	_, err = io.Copy(b, res.Body)
-	if err != nil {
+	followup, followupErr, reqErr := generateFollowupRequest(ctx, opts, meta.res, meta.body)
+	if followupErr != nil {
 		return "", &reqError{
-			fmt.Sprintf("HTTP CRITICAL - Error in read response: %v", err),
-			CRITICAL,
+			fmt.Sprintf("HTTP UNKNOWN - Error when generating followup request: %s", followupErr),
+			UNKNOWN,
 		}
 	}
+	if reqErr != nil {
+		return "", reqErr
+	}
+	if followup != nil {
 
-	duration := time.Since(start)
-	var matched []string
-
-	statusLine := fmt.Sprintf("%s %s", res.Proto, res.Status)
-	if opts.Expect != "" {
-		m := expectedStatusCode(opts, res.Status)
-		if m == "" {
-			return "", &reqError{
-				fmt.Sprintf("HTTP CRITICAL - Invalid HTTP response received from host on port %d: %s", opts.Port, statusLine),
-				CRITICAL,
-			}
-		} else {
-			matched = append(matched, fmt.Sprintf(`Status line output "%s" matched "%s"`, statusLine, opts.Expect))
-		}
-	} else {
-		switch {
-		case res.StatusCode >= 200 && res.StatusCode < 400:
-			matched = append(matched, statusLine)
-		case res.StatusCode >= 400 && res.StatusCode < 500:
-			return "", &reqError{
-				fmt.Sprintf("HTTP WARNING - Invalid HTTP response received from host on port %d: %s", opts.Port, statusLine),
-				WARNING,
-			}
-		default:
-			return "", &reqError{
-				fmt.Sprintf("HTTP CRITICAL - Invalid HTTP response received from host on port %d: %s", opts.Port, statusLine),
-				CRITICAL,
-			}
-		}
 	}
 
-	if len(opts.expectByte) > 0 {
-		if !bytes.Contains(b.Bytes(), opts.expectByte) {
-			return "", &reqError{
-				fmt.Sprintf(`HTTP CRITICAL - HTTP response body Not matched %q from host on port %d`, string(opts.expectByte), opts.Port),
-				CRITICAL,
-			}
-		} else {
-			matched = append(matched, fmt.Sprintf(`Response body matched %q`, string(opts.expectByte)))
-		}
+	matches, reqErr := searchForPatterns(meta.buffer, meta.body, meta.res.Proto, meta.res.Status, opts)
+	if reqErr != nil {
+		return "", reqErr
 	}
 
-	b.Write([]byte(statusLine + "\r\n\r\n"))
-	res.Header.Write(b)
+	statusLine := fmt.Sprintf("%s %s", meta.res.Proto, meta.res.Status)
+	meta.buffer.Write([]byte(statusLine + "\r\n\r\n"))
+	meta.res.Header.Write(meta.buffer)
 
-	okMsg := fmt.Sprintf(`HTTP OK - %s - %d bytes in %.3f second response time | time=%fs;;;0.000000 size=%dB;;;0`, strings.Join(matched, ", "), b.Size(), duration.Seconds(), duration.Seconds(), b.Size())
+	okMsg := fmt.Sprintf(`HTTP OK - %s - %d bytes in %.3f second response time | time=%fs;;;0.000000 size=%dB;;;0`, strings.Join(matches, ", "), meta.buffer.Size(), meta.duration.Seconds(), meta.duration.Seconds(), meta.buffer.Size())
 	return okMsg, nil
+}
+
+// If the HTTP status code is erroneus, return a non-nil err
+func handleErroneusReturnCodes(res *http.Response) (err *reqError) {
+	if 400 <= res.StatusCode && res.StatusCode < 500 {
+		return &reqError{
+			fmt.Sprintf("HTTP WARNING - Invalid HTTP response received from host on port %d: %s", opts.Port, statusLine),
+			WARNING,
+		}
+	}
+	return nil
 }
 
 func Check(ctx context.Context, output io.Writer, osArgs []string) int {
