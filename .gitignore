@@ -11,6 +11,13 @@
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
 
-# Dependency directories (remove the comment below to include it)
-# vendor/
-check_http2
+# Work files
+go.work
+go.work.sum
+
+# used for vendoring and test
+vendor/
+tools/
+
+# built executable
+check_http
