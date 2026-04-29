@@ -31,7 +31,7 @@ const (
 )
 
 type commandOpts struct {
-	Timeout       time.Duration `long:"timeout" default:"10s" description:"Timeout to wait for connection"`
+	Timeout       time.Duration `short:"t" long:"timeout" default:"10s" description:"Timeout to wait for connection"`
 	MaxBufferSize string        `long:"max-buffer-size" default:"1MB" description:"Max buffer size to read response body"`
 	NoDiscard     bool          `long:"no-discard" description:"raise error when the response body is larger then max-buffer-size"`
 
@@ -59,6 +59,10 @@ type commandOpts struct {
 	Version             bool          `short:"V" long:"version" description:"Show version"`
 	Verbose             bool          `short:"v" long:"verbose" description:"Show verbose output"`
 	Proxy               string        `long:"proxy" description:"Proxy that should be used"`
+	RegexStr            string        `long:"regex" description:"Search page for case-sensitive regex string"`
+	EregexStr           string        `long:"eregex" descirpition:"Search page for case-insensitive regex string"`
+	ShowBody            bool          `long:"show-body" description:"Print body content bellow status line"`
+	Follow              string        `long:"follow" description:"Redirection options: ok, warning, critical, follow, sticky, stickyport"`
 	bufferSize          uint64
 	expectByte          []byte
 }
