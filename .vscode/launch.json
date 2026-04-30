@@ -9,11 +9,81 @@
             "type": "go",
             "request": "launch",
             "mode": "exec",
-            "program": "${workspaceFolder}/check_http",
+            "program": "${workspaceFolder}/check_http.linux.amd64",
             "args": [
                 "--hostname",
                 "example.com",
                 "-v"
+            ],
+            "env": {},
+            "preLaunchTask": "build linux-amd64 debug"
+        },
+        {
+            "name": "check_http --hostname mail.google.com -v --timeout 1000000s",
+            "type": "go",
+            "request": "launch",
+            "mode": "exec",
+            "program": "${workspaceFolder}/check_http.linux.amd64",
+            "args": [
+                "--hostname",
+                "mail.google.com",
+                "-v",
+                "--timeout",
+                "1000000s"
+            ],
+            "env": {},
+            "preLaunchTask": "build linux-amd64 debug"
+        },
+        {
+            "name": "check_http -v --hostname mail.google.com --follow follow --timeout 1000000s",
+            "type": "go",
+            "request": "launch",
+            "mode": "exec",
+            "program": "${workspaceFolder}/check_http.linux.amd64",
+            "args": [
+                "-v",
+                "--hostname",
+                "mail.google.com",
+                "--follow",
+                "follow",
+                "--timeout",
+                "1000000s"
+            ],
+            "env": {},
+            "preLaunchTask": "build linux-amd64 debug"
+        },
+        {
+            "name": "check_http -v --hostname mail.google.com --follow ok --timeout 1000000s",
+            "type": "go",
+            "request": "launch",
+            "mode": "exec",
+            "program": "${workspaceFolder}/check_http.linux.amd64",
+            "args": [
+                "-v",
+                "--hostname",
+                "mail.google.com",
+                "--follow",
+                "ok",
+                "--timeout",
+                "1000000s"
+            ],
+            "env": {},
+            "preLaunchTask": "build linux-amd64 debug"
+        },
+        {
+            "name": "check_http -v --hostname mail.google.com --follow sticky --timeout 1000000s",
+            "type": "go",
+            "request": "launch",
+            "mode": "exec",
+            "program": "${workspaceFolder}/check_http.linux.amd64",
+            "args": [
+                "-v",
+                "--hostname",
+                "mail.google.com",
+                "--follow",
+                "sticky",
+                "--timeout",
+                "1000000s"
             ],
             "env": {},
             "preLaunchTask": "build linux-amd64 debug"
