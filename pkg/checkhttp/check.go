@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -19,7 +20,6 @@ import (
 	"time"
 
 	"github.com/dustin/go-humanize"
-	"github.com/go-gost/x/ctx"
 	"github.com/sni/go-flags"
 )
 
@@ -62,9 +62,10 @@ type commandOpts struct {
 	Verbose             bool          `short:"v" long:"verbose" description:"Show verbose output"`
 	Proxy               string        `long:"proxy" description:"Proxy that should be used"`
 	RegexStr            string        `long:"regex" description:"Search page for case-sensitive regex string"`
-	EregexStr           string        `long:"eregex" descirpition:"Search page for case-insensitive regex string"`
+	EregexStr           string        `long:"eregex" description:"Search page for case-insensitive regex string"`
 	ShowBody            bool          `long:"show-body" description:"Print body content bellow status line"`
 	Follow              string        `long:"follow" description:"Redirection method" choice:"ok" choice:"warning" choice:"critical" choice:"follow" choice:"sticky" choice:"stickyport"`
+	MaxRedirects        int           `long:"max-redirs" description:"Maximum redirects before giving up on following"`
 	bufferSize          uint64
 	expectByte          []byte
 }
@@ -214,16 +215,16 @@ func (w *capWriter) Bytes() []byte {
 	return w.buffer
 }
 
-type reqError struct {
+type CheckResult struct {
 	msg  string
 	code int
 }
 
-func (e *reqError) Error() string {
+func (e *CheckResult) Error() string {
 	return e.msg
 }
 
-func (e *reqError) Code() int {
+func (e *CheckResult) Code() int {
 	return e.code
 }
 
@@ -233,8 +234,8 @@ type RequestMetadata struct {
 	duration time.Duration
 	buffer   *capWriter
 	body     string
-	// if a follow up request was made due redirections
-	followup *RequestMetadata
+	// redirection error from custom handler
+	redirectionErr *clientRedirectError
 }
 
 // Helper function to extract everything from *http.Request
@@ -246,8 +247,22 @@ func performHttpRequest(req *http.Request, client *http.Client, opts commandOpts
 
 	start := time.Now()
 	res, err := client.Do(req)
+	duration := time.Since(start)
+
+	var redirectionErr *clientRedirectError
 	if err != nil {
-		return nil, fmt.Errorf("Error when performing request: %s", err.Error())
+		if urlErr, ok := errors.AsType[*url.Error](err); ok {
+			if clientRedirectErr, ok := errors.AsType[*clientRedirectError](urlErr.Err); ok {
+				// this is not really an error, we pack information into this error struct
+				// the code acts according to the chosen follow strategy
+				log.Printf("Found a clientRedirectError")
+				redirectionErr = clientRedirectErr
+			} else {
+				return nil, fmt.Errorf("error during request: %w", err)
+			}
+		} else {
+			return nil, fmt.Errorf("error during request: %w", err)
+		}
 	}
 
 	if opts.Verbose {
@@ -255,108 +270,45 @@ func performHttpRequest(req *http.Request, client *http.Client, opts commandOpts
 		log.Printf("response:\n%s", resDump)
 	}
 
-	buffer := &capWriter{
+	var buffer *capWriter = &capWriter{
 		Cap:       opts.bufferSize,
 		NoDiscard: opts.NoDiscard,
 	}
-	defer res.Body.Close()
-	_, err = io.Copy(buffer, res.Body)
-	body := string(buffer.Bytes())
+	var body string
+	if redirectionErr == nil && res != nil && res.Body != nil {
+		writtenByteCount, ioCopyErr := io.Copy(buffer, res.Body)
+		defer res.Body.Close()
 
-	if err != nil {
-		return nil, fmt.Errorf("Error when copying body buffer: %s", err.Error())
+		if ioCopyErr != nil {
+			return nil, fmt.Errorf("Error when copying request body buffer: %s , written bytes: %d", ioCopyErr.Error(), writtenByteCount)
+		}
+
+		body = string(buffer.Bytes())
 	}
 
-	duration := time.Since(start)
-
+	// the returned err might be of type clientRedirectError
 	return &RequestMetadata{
 		req,
 		res,
 		duration,
 		buffer,
 		body,
-		nil,
+		redirectionErr,
 	}, nil
-
-}
-
-// If a followup request is necessary, return it with err nil
-// If a folllowup request is necessary and can not be generated, return nil with non-nil err
-// If the function can return immediately
-func generateFollowupRequest(ctx ctx.Context, opts commandOpts, res *http.Response, body string) (followup *http.Request, followupGenerationErr error, err *reqError) {
-	createFollowupRequest := false
-
-	// some HTTP codes force the request to be converted to a GET request.
-	changeHTTPMethodToGet := false
-
-	var locationHeader string
-	useLocationHeader := false
-
-	// some Requests give alternative links in the body.
-	searchLinksInBody := false
-
-	// https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Redirections
-	switch {
-	case 200 <= res.StatusCode && res.StatusCode < 300:
-		break
-	case res.StatusCode == http.StatusMultipleChoices:
-		// have to read the status body
-	case res.StatusCode == http.StatusMovedPermanently:
-		createFollowupRequest = true
-		changeHTTPMethodToGet = true
-	case res.StatusCode == http.StatusFound:
-		createFollowupRequest = true
-		changeHTTPMethodToGet = true
-	case res.StatusCode == http.StatusSeeOther:
-		changeHTTPMethodToGet = true
-		createFollowupRequest = true
-	case res.StatusCode == http.StatusNotModified:
-		// cached response is still valid
-		createFollowupRequest = false
-	case res.StatusCode == http.StatusTemporaryRedirect:
-		// web site is not available
-		useLocationHeader := true
-	case res.StatusCode == http.StatusPermanentRedirect:
-		// method and body not changed
-		// TODO
-	default:
-		return nil, nil, nil
-	}
-
-	// use the same context and options to build the followup, but modify it based on redirect
-	followup, followupGenerationErr = buildRequest(ctx, opts)
-	if followupGenerationErr != nil {
-		return nil, fmt.Errorf("Error when building followup request: %s", err.Error()), nil
-	}
-
-	if useLocationHeader {
-		locationHeader = res.Header.Get("Location")
-
-		url, urlParseErr := url.Parse(locationHeader)
-		if urlParseErr != nil {
-			return nil, fmt.Errorf("Error when parsing redirection the url: %s", err.Error()), nil
-		}
-		followup.URL = url
-		followup.Host = url.Host
-	}
-
-	if changeHTTPMethodToGet {
-		followup.Method = "GET"
-	}
 
 }
 
 // Check the body of the response for patterns.
 // If a status code / byte sequence / regex is wanted and is not present return an error.
 // If they are present, add them to the list of matches.
-func searchForPatterns(bodyBytes *capWriter, bodyString string, proto string, status string, opts commandOpts) (matches []string, err *reqError) {
+func searchForPatterns(bodyBytes *capWriter, bodyString string, proto string, status string, opts commandOpts) (matches []string, err *CheckResult) {
 	statusLine := fmt.Sprintf("%s %s", proto, status)
 
 	// matched portions in the page
 	if opts.Expect != "" {
 		m := expectedStatusCode(opts, status)
 		if m == "" {
-			return []string{}, &reqError{
+			return []string{}, &CheckResult{
 				fmt.Sprintf("HTTP CRITICAL - Invalid HTTP response received from host on port %d: %s", opts.Port, statusLine),
 				CRITICAL,
 			}
@@ -369,7 +321,7 @@ func searchForPatterns(bodyBytes *capWriter, bodyString string, proto string, st
 
 	if len(opts.expectByte) > 0 {
 		if !bytes.Contains(bodyBytes.Bytes(), opts.expectByte) {
-			return matches, &reqError{
+			return matches, &CheckResult{
 				fmt.Sprintf(`HTTP CRITICAL - HTTP response body Not matched %q from host on port %d`, string(opts.expectByte), opts.Port),
 				CRITICAL,
 			}
@@ -381,14 +333,14 @@ func searchForPatterns(bodyBytes *capWriter, bodyString string, proto string, st
 	if opts.RegexStr != "" {
 		re := regexp.MustCompile(opts.RegexStr)
 		if err != nil {
-			return matches, &reqError{
+			return matches, &CheckResult{
 				fmt.Sprintf(`Could not build case sensitive regex from option: '%s'`, opts.RegexStr),
 				UNKNOWN,
 			}
 		}
 		re_matched := re.FindStringSubmatch(bodyString)
 		if len(re_matched) == 0 {
-			return matches, &reqError{
+			return matches, &CheckResult{
 				fmt.Sprintf(`HTTP CRITICAL - HTTP response body did not match regex: '%s' from host: %s on port: %d`, opts.RegexStr, string(opts.expectByte), opts.Hostname, opts.Port),
 				CRITICAL,
 			}
@@ -400,14 +352,14 @@ func searchForPatterns(bodyBytes *capWriter, bodyString string, proto string, st
 		// as option add (%?) case insensitive
 		re, err := regexp.Compile("(?i)" + opts.EregexStr)
 		if err != nil {
-			return matches, &reqError{
+			return matches, &CheckResult{
 				fmt.Sprintf(`Could not build case insensitive regex from option: '%s'`, opts.EregexStr),
 				UNKNOWN,
 			}
 		}
 		re_matched := re.FindStringSubmatch(bodyString)
 		if len(re_matched) == 0 {
-			return matches, &reqError{
+			return matches, &CheckResult{
 				fmt.Sprintf(`HTTP CRITICAL - HTTP response body did not match regex: '%s' from host: %s on port: %d`, opts.RegexStr, string(opts.expectByte), opts.Hostname, opts.Port),
 				CRITICAL,
 			}
@@ -418,41 +370,192 @@ func searchForPatterns(bodyBytes *capWriter, bodyString string, proto string, st
 	return matches, nil
 }
 
+type clientRedirectError struct {
+	followOption string
+	originalHost string
+	originalPort int
+	// if this is not nil it is the final result of the check
+	// it can be returned immediately
+	checkResult *CheckResult
+	// stop the redirection. if this is catched, the current page should be check
+	stopRedirect bool
+	// next redirection
+	redirectedReq *http.Request
+}
+
+func (e *clientRedirectError) Error() string {
+	str := fmt.Sprintf("clientRedirectHandlerError, this value encapsulates the follow command line option: '%s' .", e.followOption)
+	switch {
+	case e.followOption == "":
+		str += "Follow option is not specified. This means following is not allowed."
+	case e.followOption == "follow":
+		str += "This uses the default behavior of go standard http package for redirections."
+	case e.followOption == "ok":
+		str += "This means that any redirection is an OK result."
+	case e.followOption == "warning":
+		str += "This means that any redirection is an WARNING result."
+	case e.followOption == "critical":
+		str += "This means that any redirection is an CRITICAL result."
+	case e.followOption == "sticky":
+		str += "This means that redirections are allowed, but the hostanme/IP and the port is forced to stay the same."
+	case e.followOption == "stickyport":
+		str += "This means that redirections are allowed, but the hostanme/IP and the port is forced to stay the same."
+	}
+	return str
+}
+
+func clientRedirectErrorHandler(err clientRedirectError, meta *RequestMetadata, opts commandOpts) (checkResult *CheckResult, nextReq *http.Request) {
+	switch {
+	case err.followOption == "":
+		return nil, nil
+	case err.followOption == "follow":
+		log.Panicf("This option should have returned nil and continued redirection in redirection handler.")
+		return nil, nil
+	// HTTP OK: 302 Found - 215 bytes in 0.045 second response time |time=0.045s size=215B
+	case err.followOption == "ok":
+		return &CheckResult{
+			fmt.Sprintf("HTTP OK: %d - %d bytes in %.3f second response time | time=%.3f size=%dB", meta.res.StatusCode, meta.res.ContentLength, meta.duration.Seconds(), meta.duration.Seconds(), meta.res.ContentLength),
+			0,
+		}, nil
+	case err.followOption == "warning":
+		return &CheckResult{
+			fmt.Sprintf("HTTP WARNING: %d - %d bytes in %.3f second response time | time=%.3f size=%dB", meta.res.StatusCode, meta.res.ContentLength, meta.duration.Seconds(), meta.duration.Seconds(), meta.res.ContentLength),
+			0,
+		}, nil
+	case err.followOption == "critical":
+		return &CheckResult{
+			fmt.Sprintf("HTTP CRITICAL: %d - %d bytes in %.3f second response time | time=%.3f size=%dB", meta.res.StatusCode, meta.res.ContentLength, meta.duration.Seconds(), meta.duration.Seconds(), meta.res.ContentLength),
+			0,
+		}, nil
+	case err.followOption == "sticky", err.followOption == "stickyport":
+		nextReq = err.redirectedReq
+
+		// http.Request ignores req.URL.Host is set
+
+		var origHost, origPortStr string
+		_, _, splitErr := net.SplitHostPort(err.originalHost)
+		if splitErr == nil {
+			origHost, origPortStr, _ = net.SplitHostPort(err.originalHost)
+			if origPortStr == "" {
+				// fallback to opts.Port logic
+				if opts.SSL {
+					origPortStr = "443"
+				} else {
+					origPortStr = "80"
+				}
+			}
+
+			if err.followOption == "sticky" {
+				// sticky: keep original host, follow redirect port
+				nextReq.URL.Host = net.JoinHostPort(origHost, nextReq.URL.Port())
+			} else if err.followOption == "stickyport" {
+				// stickyport: keep both host and port
+				nextReq.URL.Host = net.JoinHostPort(origHost, origPortStr)
+			}
+
+		}
+
+		nextReq.Host = nextReq.URL.Hostname()
+
+		return nil, nextReq
+	default:
+		return &CheckResult{
+			fmt.Sprintf("HTTP UNKNOWN: Unknown follow strategy: %s", err.followOption),
+			0,
+		}, nil
+	}
+}
+
+// if this function does not return an error, the redirection can continue
+// The arguments req and via are the upcoming request and the requests made already, oldest first.
+// This function is used to continue following, or encapsulate the follow strategy in an custom error type
+func clientRedirectHandler(req *http.Request, via []*http.Request, opts commandOpts) (err error) {
+	clientHandlerErr := &clientRedirectError{
+		followOption:  opts.Follow,
+		redirectedReq: req,
+	}
+	if len(via) > 0 {
+		clientHandlerErr.originalHost = via[0].URL.Host
+		if clientHandlerErr.originalHost == "" {
+			clientHandlerErr.originalHost = via[0].Host
+		}
+	} else {
+		clientHandlerErr.originalHost = req.URL.Host // fallback
+	}
+	clientHandlerErr.originalPort = opts.Port
+
+	switch {
+	case opts.Follow == "":
+		// following is not enabled by default
+		clientHandlerErr.stopRedirect = true
+	case opts.Follow == "follow":
+		return nil
+	case opts.Follow == "ok",
+		opts.Follow == "warning",
+		opts.Follow == "critical",
+		opts.Follow == "sticky",
+		opts.Follow == "stickyport":
+	default:
+		return fmt.Errorf("Unknown/Unsupported follow option: %s", opts.Follow)
+	}
+
+	return clientHandlerErr
+}
+
 // Naemon-Like function that returns naemon errors, handles redirections, checks body content
-func request(ctx context.Context, client *http.Client, opts commandOpts) (string, *reqError) {
+func request(ctx context.Context, client *http.Client, opts commandOpts) (okMsg string, result *CheckResult) {
+
 	req, err := buildRequest(ctx, opts)
 	if err != nil {
-		return "", &reqError{
+		return "", &CheckResult{
 			fmt.Sprintf("Error in building request: %v", err),
 			UNKNOWN,
 		}
 	}
 
-	meta, err := performHttpRequest(req, client, opts)
-	if err != nil {
-		return "", &reqError{
-			fmt.Sprintf("HTTP UNKNOWN - Error when performing request: %s", err),
+	var meta *RequestMetadata
+	var nextReq *http.Request
+	// first request is not a redirection , second is the first redirection
+	redirectionCount := -1
+	for req != nil {
+		if redirectionCount > opts.MaxRedirects {
+			return "", &CheckResult{
+				"HTTP UNKNOWN - Max redirections reached",
+				UNKNOWN,
+			}
+		}
+
+		meta, err = performHttpRequest(req, client, opts)
+		if err != nil {
+			return "", &CheckResult{
+				fmt.Sprintf("HTTP UNKNOWN - Error when performing request: %s", err),
+				UNKNOWN,
+			}
+		}
+		if meta.redirectionErr != nil {
+			result, nextReq = clientRedirectErrorHandler(*meta.redirectionErr, meta, opts)
+		}
+		req = nextReq
+		redirectionCount++
+	}
+
+	// redirection might have given us a check result
+	// we should return this immediately
+	if result != nil {
+		return "", result
+	}
+
+	// sanity check
+	if meta == nil {
+		return "", &CheckResult{
+			"HTTP UNKNOWN - Error when performing request",
 			UNKNOWN,
 		}
 	}
 
-	reqErr := handleErroneusReturnCodes(meta.res)
+	reqErr := handleErroneusReturnCodes(meta.res, opts, meta.res.Proto, meta.res.Status)
 	if reqErr != nil {
 		return "", reqErr
-	}
-
-	followup, followupErr, reqErr := generateFollowupRequest(ctx, opts, meta.res, meta.body)
-	if followupErr != nil {
-		return "", &reqError{
-			fmt.Sprintf("HTTP UNKNOWN - Error when generating followup request: %s", followupErr),
-			UNKNOWN,
-		}
-	}
-	if reqErr != nil {
-		return "", reqErr
-	}
-	if followup != nil {
-
 	}
 
 	matches, reqErr := searchForPatterns(meta.buffer, meta.body, meta.res.Proto, meta.res.Status, opts)
@@ -464,14 +567,15 @@ func request(ctx context.Context, client *http.Client, opts commandOpts) (string
 	meta.buffer.Write([]byte(statusLine + "\r\n\r\n"))
 	meta.res.Header.Write(meta.buffer)
 
-	okMsg := fmt.Sprintf(`HTTP OK - %s - %d bytes in %.3f second response time | time=%fs;;;0.000000 size=%dB;;;0`, strings.Join(matches, ", "), meta.buffer.Size(), meta.duration.Seconds(), meta.duration.Seconds(), meta.buffer.Size())
+	okMsg = fmt.Sprintf(`HTTP OK - %s - %d bytes in %.3f second response time | time=%fs;;;0.000000 size=%dB;;;0`, strings.Join(matches, ", "), meta.buffer.Size(), meta.duration.Seconds(), meta.duration.Seconds(), meta.buffer.Size())
 	return okMsg, nil
 }
 
 // If the HTTP status code is erroneus, return a non-nil err
-func handleErroneusReturnCodes(res *http.Response) (err *reqError) {
+func handleErroneusReturnCodes(res *http.Response, opts commandOpts, proto string, status string) (err *CheckResult) {
+	statusLine := fmt.Sprintf("%s %s", proto, status)
 	if 400 <= res.StatusCode && res.StatusCode < 500 {
-		return &reqError{
+		return &CheckResult{
 			fmt.Sprintf("HTTP WARNING - Invalid HTTP response received from host on port %d: %s", opts.Port, statusLine),
 			WARNING,
 		}
@@ -573,6 +677,10 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 		opts.URI = "/"
 	}
 
+	if opts.MaxRedirects == 0 {
+		opts.MaxRedirects = 15
+	}
+
 	transport, err := makeTransport(opts)
 
 	if err != nil {
@@ -582,7 +690,7 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 	client := &http.Client{
 		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
+			return clientRedirectHandler(req, via, opts)
 		},
 		Timeout: opts.Timeout,
 	}
@@ -629,7 +737,7 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 	}
 
 	consecutive := opts.Consecutive - 1
-	var reqErr *reqError
+	var reqErr *CheckResult
 	for ctx.Err() == nil {
 		var okMsg string
 		requestNum++
