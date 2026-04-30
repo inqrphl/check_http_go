@@ -19,5 +19,6 @@ go.work.sum
 vendor/
 tools/
 
-# built executable
+# built executables
 check_http
+check_http.*.*
