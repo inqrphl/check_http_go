@@ -590,6 +590,12 @@ func handleErroneusReturnCodes(res *http.Response, opts commandOpts, proto strin
 			WARNING,
 		}
 	}
+	if 500 <= res.StatusCode {
+		return &CheckResult{
+			fmt.Sprintf("HTTP CRITICAL - Invalid HTTP response received from host on port %d: %s", opts.Port, statusLine),
+			CRITICAL,
+		}
+	}
 	return nil
 }
 
