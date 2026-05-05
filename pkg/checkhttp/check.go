@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -121,11 +122,7 @@ func makeDialer(opts commandOpts) func(ctx context.Context, _ string, _ string) 
 	return dialFunc
 }
 
-func makeTransport(opts commandOpts) (http.RoundTripper, error) {
-
-	dialFunc := makeDialer(opts)
-
-	tlsConfig := makeTlsConfig(opts)
+func makeTransport(opts commandOpts, dialFunc func(ctx context.Context, _ string, _ string) (net.Conn, error), tlsConfig *tls.Config) (http.RoundTripper, error) {
 
 	proxy := http.ProxyFromEnvironment
 	if opts.Proxy != "" {
@@ -596,6 +593,99 @@ func handleErroneusReturnCodes(res *http.Response, opts commandOpts, proto strin
 	return nil
 }
 
+// checkCertificate establishes a TLS connection to the server and validates the certificate
+// against the warning and critical thresholds. It returns immediately without checking the HTTP content.
+func checkCertificate(ctx context.Context, opts commandOpts, dialFunc func(ctx context.Context, _ string, _ string) (net.Conn, error), tlsConfig *tls.Config) *CheckResult {
+	// For certificate checking, we need to set ServerName for SNI
+	if tlsConfig.ServerName == "" {
+		host, _, err := net.SplitHostPort(opts.Hostname)
+		if err != nil {
+			host = opts.Hostname
+		}
+		tlsConfig.ServerName = host
+	}
+
+	conn, err := dialFunc(ctx, "", "")
+	if err != nil {
+		return &CheckResult{
+			fmt.Sprintf("HTTP CRITICAL - Error connecting to host %s on port %d: %v", opts.IPAddress, opts.Port, err),
+			CRITICAL,
+		}
+	}
+	defer conn.Close()
+
+	tlsConn := tls.Client(conn, tlsConfig)
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		return &CheckResult{
+			fmt.Sprintf("HTTP CRITICAL - TLS handshake failed for host %s on port %d: %v", opts.IPAddress, opts.Port, err),
+			CRITICAL,
+		}
+	}
+
+	certs := tlsConn.ConnectionState().PeerCertificates
+	if len(certs) == 0 {
+		return &CheckResult{
+			fmt.Sprintf("HTTP CRITICAL - No certificate returned from host %s on port %d", opts.IPAddress, opts.Port),
+			CRITICAL,
+		}
+	}
+
+	// certs[0] is the leaf certificate, the certificate belonging to the site that we are visitng
+	// certs[1..n-1] are the intermediate certificates sign each other and go up in scope
+	// certs[n] is the root certificate. this is either from the web browser / system
+	cert := certs[0]
+
+	expiry := cert.NotAfter
+	daysLeft := int(time.Until(expiry).Hours() / 24)
+
+	critDaysPerfStr := ""
+	if opts.certificateCritDays != nil {
+		critDaysPerfStr = strconv.Itoa(*opts.certificateCritDays)
+	}
+
+	var perfParts []string
+	for i, c := range certs {
+		chainDaysLeft := int(time.Until(c.NotAfter).Hours() / 24)
+		if i == 0 {
+			perfParts = append(perfParts, fmt.Sprintf("expire=%dd;%d;%s;0", chainDaysLeft, opts.certificateWarnDays, critDaysPerfStr))
+		} else {
+			perfParts = append(perfParts, fmt.Sprintf("expire_chain_%d=%dd;;;0", i, chainDaysLeft))
+		}
+	}
+	perfData := strings.Join(perfParts, " ")
+
+	// formatCertSubject returns a formatted string with the certificate subject details
+	formatCertSubject := func(cert *x509.Certificate) string {
+		return fmt.Sprintf(" (subject: %s, issuer: %s)", cert.Subject.CommonName, cert.Issuer.CommonName)
+	}
+
+	var result *CheckResult
+	if opts.certificateCritDays != nil && daysLeft <= *opts.certificateCritDays {
+		result = &CheckResult{
+			fmt.Sprintf("HTTP CRITICAL - Certificate expiration for host %s on port %d: %s - %d days left%s | %s",
+				opts.Hostname, opts.Port, expiry.Format(time.RFC3339), daysLeft,
+				formatCertSubject(cert), perfData),
+			CRITICAL,
+		}
+	} else if daysLeft <= opts.certificateWarnDays {
+		result = &CheckResult{
+			fmt.Sprintf("HTTP WARNING - Certificate expiration for host %s on port %d: %s - %d days left%s | %s",
+				opts.Hostname, opts.Port, expiry.Format(time.RFC3339), daysLeft,
+				formatCertSubject(cert), perfData),
+			WARNING,
+		}
+	} else {
+		result = &CheckResult{
+			fmt.Sprintf("HTTP OK - Certificate expiration for host %s on port %d: %s - %d days left%s | %s",
+				opts.Hostname, opts.Port, expiry.Format(time.RFC3339), daysLeft,
+				formatCertSubject(cert), perfData),
+			OK,
+		}
+	}
+
+	return result
+}
+
 func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 	opts := commandOpts{}
 	psr := flags.NewParser(&opts, flags.HelpFlag|flags.PassDoubleDash) // default flags without flags.PrintErrors
@@ -774,10 +864,30 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 		}
 	}
 
-	transport, err := makeTransport(opts)
+	// Build shared TLS config and dialer
+	tlsConfig := makeTlsConfig(opts)
+	dialFunc := makeDialer(opts)
 
+	// If certificate check is enabled, perform certificate validation and return
+	if opts.Certificate != "" {
+		if !opts.SSL {
+			fmt.Fprintf(output, "SSL must be enabled for certificate check\n")
+			return UNKNOWN
+		}
+
+		timeout := opts.Timeout + 3*time.Second
+		ctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+
+		certResult := checkCertificate(ctx, opts, dialFunc, tlsConfig)
+		fmt.Fprintf(output, "%s\n", certResult.Error())
+		return certResult.Code()
+	}
+
+	transport, err := makeTransport(opts, dialFunc, tlsConfig)
 	if err != nil {
 		fmt.Fprintf(output, "Error in http configuration: %s\n", err.Error())
+		return UNKNOWN
 	}
 
 	client := &http.Client{
