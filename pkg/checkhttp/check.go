@@ -900,7 +900,7 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 		opts.tlsMaxVersion = tls.VersionTLS13
 	}
 
-	if opts.tlsMinVersion > opts.tlsMaxVersion {
+	if opts.tlsMinVersion != 0 && opts.tlsMaxVersion != 0 && opts.tlsMinVersion > opts.tlsMaxVersion {
 		fmt.Fprintf(output, "TLS min version value is higher than TLS max version value, check your arguments.\n")
 
 		return UNKNOWN
