@@ -1,0 +1,332 @@
+package checkhttp_test
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sni/check_http_go/pkg/checkhttp"
+)
+
+const (
+	testHost = "omd.consol.de"
+	testURI  = "/impressum/"
+)
+
+//nolint:wsl,wsl_v5 // test boilerplate follows standard pattern
+func TestHTTP(t *testing.T) {
+	t.Parallel()
+
+	if testing.Short() {
+		t.Skip("skipping network test in short mode")
+	}
+
+	var output strings.Builder
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+
+	defer cancel()
+
+	code := checkhttp.Check(ctx, &output, []string{"check_http", "-H", "example.com", "-u", "/"})
+
+	t.Logf("output: %s", output.String())
+
+	if code != checkhttp.OK {
+		t.Errorf("expected exit code OK (0), got %d", code)
+	}
+}
+
+//nolint:wsl,wsl_v5 // test boilerplate follows standard pattern
+func TestHTTPSAutoNegotiated(t *testing.T) {
+	t.Parallel()
+
+	if testing.Short() {
+		t.Skip("skipping network test in short mode")
+	}
+
+	var output strings.Builder
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+
+	defer cancel()
+
+	code := checkhttp.Check(ctx, &output, []string{"check_http", "-H", testHost, "-u", testURI, "-S"})
+
+	t.Logf("output: %s", output.String())
+
+	if code != checkhttp.OK {
+		t.Errorf("expected exit code OK (0), got %d", code)
+	}
+
+	if !strings.Contains(output.String(), "HTTP OK") {
+		t.Errorf("expected output to contain 'HTTP OK'")
+	}
+}
+
+//nolint:wsl,wsl_v5 // test boilerplate follows standard pattern
+func TestHTTPSMaxVersion(t *testing.T) {
+	t.Parallel()
+
+	if testing.Short() {
+		t.Skip("skipping network test in short mode")
+	}
+
+	var output strings.Builder
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+
+	defer cancel()
+
+	code := checkhttp.Check(ctx, &output, []string{"check_http", "-H", testHost, "-u", testURI, "-S", "--tls-min", "1.3"})
+
+	t.Logf("output: %s", output.String())
+
+	if code != checkhttp.OK {
+		t.Errorf("expected exit code OK (0), got %d", code)
+	}
+
+	if !strings.Contains(output.String(), "HTTP OK") {
+		t.Errorf("expected output to contain 'HTTP OK'")
+	}
+}
+
+//nolint:wsl,wsl_v5 // test boilerplate follows standard pattern
+func TestCertificateCheckWarn3Days(t *testing.T) {
+	t.Parallel()
+
+	if testing.Short() {
+		t.Skip("skipping network test in short mode")
+	}
+
+	var output strings.Builder
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+
+	defer cancel()
+
+	code := checkhttp.Check(ctx, &output, []string{"check_http", "-H", testHost, "-S", "-C", "3"})
+
+	t.Logf("output: %s", output.String())
+
+	if code != checkhttp.OK {
+		t.Errorf("expected exit code OK (0), got %d", code)
+	}
+
+	if !strings.Contains(output.String(), "HTTP OK") {
+		t.Errorf("expected output to contain 'HTTP OK'")
+	}
+
+	if !strings.Contains(output.String(), "expire=") {
+		t.Errorf("expected perfdata to contain 'expire='")
+	}
+}
+
+//nolint:wsl,wsl_v5 // test boilerplate follows standard pattern
+func TestCertificateCheckWarn100000Days(t *testing.T) {
+	t.Parallel()
+
+	if testing.Short() {
+		t.Skip("skipping network test in short mode")
+	}
+
+	var output strings.Builder
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+
+	defer cancel()
+
+	code := checkhttp.Check(ctx, &output, []string{"check_http", "-H", testHost, "-S", "-C", "100000"})
+
+	t.Logf("output: %s", output.String())
+
+	if code != checkhttp.WARNING {
+		t.Errorf("expected exit code WARNING (1), got %d", code)
+	}
+
+	if !strings.Contains(output.String(), "HTTP WARNING") {
+		t.Errorf("expected output to contain 'HTTP WARNING'")
+	}
+}
+
+//nolint:wsl,wsl_v5 // test boilerplate follows standard pattern
+func TestRegex(t *testing.T) {
+	t.Parallel()
+
+	if testing.Short() {
+		t.Skip("skipping network test in short mode")
+	}
+
+	var output strings.Builder
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+
+	defer cancel()
+
+	code := checkhttp.Check(ctx, &output, []string{"check_http", "-H", testHost, "-u", testURI, "-S", "--regex", `HRB \d+`})
+
+	t.Logf("output: %s", output.String())
+
+	if code != checkhttp.OK {
+		t.Errorf("expected exit code OK (0), got %d", code)
+	}
+
+	if !strings.Contains(output.String(), "HRB 97371") {
+		t.Errorf("expected output to contain 'HRB 97371'")
+	}
+}
+
+//nolint:wsl,wsl_v5 // test boilerplate follows standard pattern
+func TestRegexNoMatch(t *testing.T) {
+	t.Parallel()
+
+	if testing.Short() {
+		t.Skip("skipping network test in short mode")
+	}
+
+	var output strings.Builder
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+
+	defer cancel()
+
+	code := checkhttp.Check(ctx, &output, []string{"check_http", "-H", testHost, "-u", testURI, "-S", "--regex", `XYZZY-NONEXISTENT`})
+
+	t.Logf("output: %s", output.String())
+
+	if code != checkhttp.CRITICAL {
+		t.Errorf("expected exit code CRITICAL (2), got %d", code)
+	}
+
+	if !strings.Contains(output.String(), "HTTP CRITICAL") {
+		t.Errorf("expected output to contain 'HTTP CRITICAL'")
+	}
+}
+
+//nolint:wsl,wsl_v5 // test boilerplate follows standard pattern
+func TestEregex(t *testing.T) {
+	t.Parallel()
+
+	if testing.Short() {
+		t.Skip("skipping network test in short mode")
+	}
+
+	var output strings.Builder
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+
+	defer cancel()
+
+	code := checkhttp.Check(ctx, &output, []string{"check_http", "-H", testHost, "-u", testURI, "-S", "--eregex", "consol"})
+
+	t.Logf("output: %s", output.String())
+
+	if code != checkhttp.OK {
+		t.Errorf("expected exit code OK (0), got %d", code)
+	}
+
+	if !strings.Contains(strings.ToLower(output.String()), "consol") {
+		t.Errorf("expected output to contain 'consol' (case-insensitive)")
+	}
+}
+
+//nolint:wsl,wsl_v5 // test boilerplate follows standard pattern
+func TestBase64String(t *testing.T) {
+	t.Parallel()
+
+	if testing.Short() {
+		t.Skip("skipping network test in short mode")
+	}
+
+	var output strings.Builder
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+
+	defer cancel()
+
+	// echo "Q29uU29s" | base64 --decode -> ConSol
+	code := checkhttp.Check(ctx, &output, []string{"check_http", "-H", testHost, "-u", testURI, "-S", "--base64-string", "Q29uU29s"})
+
+	t.Logf("output: %s", output.String())
+
+	if code != checkhttp.OK {
+		t.Errorf("expected exit code OK (0), got %d", code)
+	}
+
+	if !strings.Contains(output.String(), `Response body matched "ConSol"`) {
+		t.Errorf("expected output to contain 'Response body matched \"ConSol\"'")
+	}
+}
+
+//nolint:wsl,wsl_v5 // test boilerplate follows standard pattern
+func TestStringContent(t *testing.T) {
+	t.Parallel()
+
+	if testing.Short() {
+		t.Skip("skipping network test in short mode")
+	}
+
+	var output strings.Builder
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+
+	defer cancel()
+
+	code := checkhttp.Check(ctx, &output, []string{"check_http", "-H", testHost, "-u", testURI, "-S", "-s", "Commercial register"})
+
+	t.Logf("output: %s", output.String())
+
+	if code != checkhttp.OK {
+		t.Errorf("expected exit code OK (0), got %d", code)
+	}
+
+	if !strings.Contains(output.String(), `Response body matched "Commercial register"`) {
+		t.Errorf("expected output to contain 'Response body matched \"Commercial register\"'")
+	}
+}
+
+//nolint:wsl,wsl_v5 // test boilerplate follows standard pattern
+func TestCertificateChainPerfdata(t *testing.T) {
+	t.Parallel()
+
+	if testing.Short() {
+		t.Skip("skipping network test in short mode")
+	}
+
+	var output strings.Builder
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+
+	defer cancel()
+
+	code := checkhttp.Check(ctx, &output, []string{"check_http", "-H", testHost, "-S", "-C", "300"})
+
+	t.Logf("output: %s", output.String())
+
+	if code != checkhttp.OK {
+		t.Errorf("expected exit code OK (0), got %d", code)
+	}
+
+	if !strings.Contains(output.String(), "expire=") {
+		t.Errorf("expected perfdata to contain 'expire='")
+	}
+
+	if !strings.Contains(output.String(), "expire_chain_1=") {
+		t.Errorf("expected perfdata to contain 'expire_chain_1=' for chain cert")
+	}
+}
+
+//nolint:wsl,wsl_v5 // test boilerplate follows standard pattern
+func TestExpectStatusCode(t *testing.T) {
+	t.Parallel()
+
+	if testing.Short() {
+		t.Skip("skipping network test in short mode")
+	}
+
+	var output strings.Builder
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+
+	defer cancel()
+
+	code := checkhttp.Check(ctx, &output, []string{"check_http", "-H", testHost, "-u", testURI, "-S", "-e", "200"})
+
+	t.Logf("output: %s", output.String())
+
+	if code != checkhttp.OK {
+		t.Errorf("expected exit code OK (0), got %d", code)
+	}
+
+	if !strings.Contains(output.String(), `Status line output`) {
+		t.Errorf("expected output to contain 'Status line output'")
+	}
+}
