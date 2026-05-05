@@ -53,6 +53,9 @@ type commandOpts struct {
 	Base64ExpectContent string        `long:"base64-string" description:"Base64 Encoded string to expect the content"`
 	UserAgent           string        `short:"A" long:"useragent" default:"check_http" description:"UserAgent to be sent"`
 	Authorization       string        `short:"a" long:"authorization" description:"username:password on sites with basic authentication"`
+	Certificate         string        `short:"C" long:"certificate" description:"check certificates instead of content. Specified in days left to warn and optionally crit: <warn_days>[,<crit_days>]" `
+	certificateWarnDays int           // parsed version of certificateWarnDay
+	certificateCritDays *int          // parsed version of certificateCritDay. This is optional and may not be specified.
 	SSL                 bool          `short:"S" long:"ssl" description:"use https"`
 	SNI                 bool          `long:"sni" description:"enable SNI"`
 	TLSMinVersion       string        `long:"tls-min" description:"minimum supported TLS version. Values with plus set the max tls version as well to latest version: 1.3" choice:"1.0" choice:"1.0+" choice:"1.1" choice:"1.1+" choice:"1.2" choice:"1.2+" choice:"1.3"`
@@ -713,6 +716,48 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 	if opts.tlsMinVersion > opts.tlsMaxVersion {
 		fmt.Fprintf(output, "TLS min version value is higher than TLS max version value, check your arguments.\n")
 		return UNKNOWN
+	}
+
+	if opts.Certificate != "" {
+		splits := strings.SplitN(opts.Certificate, ",", 2)
+
+		parseDays := func(str string) (int, error) {
+			var i int64
+			var err error
+			if str == "" {
+				return 0, nil
+			}
+			i, err = strconv.ParseInt(str, 10, 32)
+			if err != nil {
+				return 0, err
+			}
+			if i < 0 {
+				return 0, fmt.Errorf("days remaining cannot be a negative value")
+			}
+			return int(i), nil
+		}
+
+		warnDays, err := parseDays(splits[0])
+		if err != nil {
+			fmt.Fprintf(output, "Certificate check warning days could not be parsed: %s.\n", err.Error())
+			return UNKNOWN
+		}
+		opts.certificateWarnDays = warnDays
+
+		if len(splits) == 2 {
+			critDays, err := parseDays(splits[1])
+			if err != nil {
+				fmt.Fprintf(output, "Certificate check critical days could not be parsed: %s.\n", err.Error())
+				return UNKNOWN
+			}
+
+			if critDays > warnDays {
+				fmt.Fprintf(output, "Certificate check critical days is higher than warning days. That is illogical, higher tier alert critical may be raised before lower tier altert warning.\n")
+				return UNKNOWN
+			}
+
+			opts.certificateCritDays = &critDays
+		}
 	}
 
 	transport, err := makeTransport(opts)
