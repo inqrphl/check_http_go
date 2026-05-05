@@ -279,10 +279,12 @@ type RequestMetadata struct {
 func performHTTPRequest(req *http.Request, client *http.Client, opts *commandOpts) (metadata *RequestMetadata, err error) {
 	if opts.Verbose {
 		reqDump, _ := httputil.DumpRequest(req, true)
+		//nolint:gosec // G706: Logging the request (which might leak secrets) is wanted by design in verbose mode
 		log.Printf("request:\n%s", reqDump)
 	}
 
 	start := time.Now()
+	//nolint:gosec // G704: Server side request forgery is flagged because req is built from CLI args. This is what the tool wants.
 	res, err := client.Do(req)
 	duration := time.Since(start)
 
@@ -306,6 +308,7 @@ func performHTTPRequest(req *http.Request, client *http.Client, opts *commandOpt
 
 	if opts.Verbose {
 		resDump, _ := httputil.DumpResponse(res, true)
+		//nolint:gosec // G706: Logging the response (which might leak secrets) is wanted by design in verbose mode
 		log.Printf("response:\n%s", resDump)
 	}
 
