@@ -55,7 +55,10 @@ type commandOpts struct {
 	Authorization       string        `short:"a" long:"authorization" description:"username:password on sites with basic authentication"`
 	SSL                 bool          `short:"S" long:"ssl" description:"use https"`
 	SNI                 bool          `long:"sni" description:"enable SNI"`
+	TLSMinVersion       string        `long:"tls-min" description:"minimum supported TLS version. Values with plus set the max tls version as well to latest version: 1.3" choice:"1.0" choice:"1.0+" choice:"1.1" choice:"1.1+" choice:"1.2" choice:"1.2+" choice:"1.3"`
+	tlsMinVersion       uint16        // parsed version of tlsMinVersion from crypto/tls
 	TLSMaxVersion       string        `long:"tls-max" description:"maximum supported TLS version" choice:"1.0" choice:"1.1" choice:"1.2" choice:"1.3"`
+	tlsMaxVersion       uint16        // parsed version of tlsMinVersion from crypto/tls
 	TCP4                bool          `short:"4" description:"use tcp4 only"`
 	TCP6                bool          `short:"6" description:"use tcp6 only"`
 	Version             bool          `short:"V" long:"version" description:"Show version"`
@@ -99,19 +102,12 @@ func makeTransport(opts commandOpts) (http.RoundTripper, error) {
 		tlsConfig.ServerName = host
 	}
 
-	if opts.TLSMaxVersion != "" {
-		switch opts.TLSMaxVersion {
-		case "1.0":
-			tlsConfig.MinVersion = tls.VersionTLS10
-			tlsConfig.MaxVersion = tls.VersionTLS10
-		case "1.1":
-			tlsConfig.MinVersion = tls.VersionTLS11
-			tlsConfig.MaxVersion = tls.VersionTLS11
-		case "1.2":
-			tlsConfig.MaxVersion = tls.VersionTLS12
-		case "1.3":
-			tlsConfig.MaxVersion = tls.VersionTLS13
-		}
+	if opts.tlsMinVersion != 0 {
+		tlsConfig.MinVersion = opts.tlsMinVersion
+	}
+
+	if opts.tlsMaxVersion != 0 {
+		tlsConfig.MaxVersion = opts.tlsMaxVersion
 	}
 
 	proxy := http.ProxyFromEnvironment
@@ -679,6 +675,44 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 
 	if opts.MaxRedirects == 0 {
 		opts.MaxRedirects = 15
+	}
+
+	switch opts.TLSMinVersion {
+	// argument parser only accepts these values as valid
+	case "1.0":
+		opts.tlsMinVersion = tls.VersionTLS10
+	case "1.0+":
+		opts.tlsMinVersion = tls.VersionTLS10
+		opts.tlsMaxVersion = tls.VersionTLS13
+	case "1.1":
+		opts.tlsMinVersion = tls.VersionTLS11
+	case "1.1+":
+		opts.tlsMinVersion = tls.VersionTLS11
+		opts.tlsMaxVersion = tls.VersionTLS13
+	case "1.2":
+		opts.tlsMinVersion = tls.VersionTLS12
+	case "1.2+":
+		opts.tlsMinVersion = tls.VersionTLS12
+		opts.tlsMaxVersion = tls.VersionTLS13
+	case "1.3":
+		opts.tlsMinVersion = tls.VersionTLS13
+	}
+
+	switch opts.TLSMaxVersion {
+	// argument parser only accepts these values as valid
+	case "1.0":
+		opts.tlsMaxVersion = tls.VersionTLS10
+	case "1.1":
+		opts.tlsMaxVersion = tls.VersionTLS11
+	case "1.2":
+		opts.tlsMaxVersion = tls.VersionTLS12
+	case "1.3":
+		opts.tlsMaxVersion = tls.VersionTLS13
+	}
+
+	if opts.tlsMinVersion > opts.tlsMaxVersion {
+		fmt.Fprintf(output, "TLS min version value is higher than TLS max version value, check your arguments.\n")
+		return UNKNOWN
 	}
 
 	transport, err := makeTransport(opts)
