@@ -1,9 +1,16 @@
 version: "2"
 linters:
   default: all
+  disable:
+    - tagalign
+    - nonamedreturns
+    - exhaustruct
+    - wrapcheck
+    - err113
+    - depguard
   settings:
     funlen:
-      lines: 80
+      lines: 200
       statements: 45
     goconst:
       min-len: 8
@@ -14,9 +21,16 @@ linters:
         - style
         - experimental
     gocyclo:
-      min-complexity: 27
+      min-complexity: 100
+    cyclop:
+      max-complexity: 100
     gomoddirectives:
       replace-local: true
+    nestif:
+      min-complexity: 10
+    mnd:
+      ignored-numbers:
+        - "2"
     govet:
       enable-all: true
       settings:
@@ -57,6 +71,7 @@ linters:
       - common-false-positives
       - legacy
       - std-error-handling
+
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0

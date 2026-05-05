@@ -30,13 +30,15 @@ const (
 	UNKNOWN  = 3
 	CRITICAL = 2
 	WARNING  = 1
-	OK       = 0
+	//nolint:varnamelen // it is simply short
+	OK = 0
 )
 
 const (
 	defaultKeepAliveSeconds       = 30
 	defaultIdleConnTimeoutSeconds = 30
 	defaultExpectContinueTimeoutSeconds
+	hoursInDays = 24
 )
 
 type commandOpts struct {
@@ -65,25 +67,29 @@ type commandOpts struct {
 	certificateCritDays *int          // parsed version of certificateCritDay. This is optional and may not be specified.
 	SSL                 bool          `short:"S" long:"ssl" description:"use https"`
 	SNI                 bool          `long:"sni" description:"enable SNI"`
-	TLSMinVersion       string        `long:"tls-min" description:"minimum supported TLS version. Values with plus set the max tls version as well to latest version: 1.3" choice:"1.0" choice:"1.0+" choice:"1.1" choice:"1.1+" choice:"1.2" choice:"1.2+" choice:"1.3"`
-	tlsMinVersion       uint16        // parsed version of tlsMinVersion from crypto/tls
-	TLSMaxVersion       string        `long:"tls-max" description:"maximum supported TLS version" choice:"1.0" choice:"1.1" choice:"1.2" choice:"1.3"`
-	tlsMaxVersion       uint16        // parsed version of tlsMinVersion from crypto/tls
-	TCP4                bool          `short:"4" description:"use tcp4 only"`
-	TCP6                bool          `short:"6" description:"use tcp6 only"`
-	Version             bool          `short:"V" long:"version" description:"Show version"`
-	Verbose             bool          `short:"v" long:"verbose" description:"Show verbose output"`
-	Proxy               string        `long:"proxy" description:"Proxy that should be used"`
-	RegexStr            string        `long:"regex" description:"Search page for case-sensitive regex string"`
-	EregexStr           string        `long:"eregex" description:"Search page for case-insensitive regex string"`
-	ShowBody            bool          `long:"show-body" description:"Print body content bellow status line"`
-	Follow              string        `long:"follow" description:"Redirection method" choice:"ok" choice:"warning" choice:"critical" choice:"follow" choice:"sticky" choice:"stickyport"`
-	MaxRedirects        int           `long:"max-redirs" description:"Maximum redirects before giving up on following"`
-	bufferSize          uint64
-	expectByte          []byte
+	//nolint:staticcheck,lll // SA5008: multiple "choice" tags are required by our CLI parser . The line is long due to a lot of possible choices.
+	TLSMinVersion string `long:"tls-min" description:"minimum supported TLS version. Values with plus set the max tls version as well to latest version: 1.3" choice:"1.0" choice:"1.0+" choice:"1.1" choice:"1.1+" choice:"1.2" choice:"1.2+" choice:"1.3"`
+	tlsMinVersion uint16 // parsed version of tlsMinVersion from crypto/tls
+	//nolint:staticcheck // SA5008: multiple "choice" tags are required by our CLI parser
+	TLSMaxVersion string `long:"tls-max" description:"maximum supported TLS version" choice:"1.0" choice:"1.1" choice:"1.2" choice:"1.3"`
+	tlsMaxVersion uint16 // parsed version of tlsMinVersion from crypto/tls
+	TCP4          bool   `short:"4" description:"use tcp4 only"`
+	TCP6          bool   `short:"6" description:"use tcp6 only"`
+	Version       bool   `short:"V" long:"version" description:"Show version"`
+	Verbose       bool   `short:"v" long:"verbose" description:"Show verbose output"`
+	Proxy         string `long:"proxy" description:"Proxy that should be used"`
+	RegexStr      string `long:"regex" description:"Search page for case-sensitive regex string"`
+	EregexStr     string `long:"eregex" description:"Search page for case-insensitive regex string"`
+	ShowBody      bool   `long:"show-body" description:"Print body content bellow status line"`
+	//nolint:staticcheck // SA5008: multiple "choice" tags are required by our CLI parser
+	Follow       string `long:"follow" description:"Redirection method" choice:"ok" choice:"warning" choice:"critical" choice:"follow" choice:"sticky" choice:"stickyport"`
+	MaxRedirects int    `long:"max-redirs" description:"Maximum redirects before giving up on following"`
+	bufferSize   uint64
+	expectByte   []byte
 }
 
-func makeTlsConfig(opts commandOpts) (conf *tls.Config) {
+func makeTLSConfig(opts *commandOpts) (conf *tls.Config) {
+	//nolint:gosec // TLS check is deliberately skipped, certificate checks are done in its separate function
 	conf = &tls.Config{
 		InsecureSkipVerify: true,
 	}
@@ -134,6 +140,7 @@ func makeDialer(opts *commandOpts) func(ctx context.Context, _ string, _ string)
 	return dialFunc
 }
 
+//nolint:ireturn // it has to return an interface, http package is built that way
 func makeTransport(opts *commandOpts, dialFunc func(ctx context.Context, _ string, _ string) (net.Conn, error), tlsConfig *tls.Config) (http.RoundTripper, error) {
 	proxy := http.ProxyFromEnvironment
 
@@ -168,13 +175,13 @@ func buildRequest(ctx context.Context, opts *commandOpts) (*http.Request, error)
 
 	uri := fmt.Sprintf("%s://%s%s", schema, opts.Hostname, opts.URI)
 
-	var b bytes.Buffer
+	var buffer bytes.Buffer
 
 	req, err := http.NewRequestWithContext(
 		ctx,
 		opts.Method,
 		uri,
-		&b,
+		&buffer,
 	)
 	if err != nil {
 		return nil, err
@@ -194,7 +201,7 @@ func buildRequest(ctx context.Context, opts *commandOpts) (*http.Request, error)
 	return req, nil
 }
 
-func expectedStatusCode(opts commandOpts, status string) string {
+func expectedStatusCode(opts *commandOpts, status string) string {
 	expects := strings.SplitSeq(opts.Expect, ",")
 	for e := range expects {
 		if strings.Contains(status, e) {
@@ -219,8 +226,8 @@ type capWriter struct {
 	NoDiscard bool
 }
 
-func (w *capWriter) Write(p []byte) (int, error) {
-	w.size += uint64(len(p))
+func (w *capWriter) Write(data []byte) (int, error) {
+	w.size += uint64(len(data))
 	if w.size > w.Cap && w.NoDiscard {
 		return 0, errors.New("could not write body buffer. buffer is full")
 	}
@@ -228,13 +235,13 @@ func (w *capWriter) Write(p []byte) (int, error) {
 	if w.size > w.Cap {
 		q := w.Cap - uint64(len(w.buffer))
 		if q != 0 {
-			w.buffer = append(w.buffer, p[0:q-1]...)
+			w.buffer = append(w.buffer, data[0:q-1]...)
 		}
 	} else {
-		w.buffer = append(w.buffer, p...)
+		w.buffer = append(w.buffer, data...)
 	}
 
-	return len(p), nil
+	return len(data), nil
 }
 
 func (w *capWriter) Size() uint64 {
@@ -245,6 +252,7 @@ func (w *capWriter) Bytes() []byte {
 	return w.buffer
 }
 
+//nolint:errname // The original author used it as an error type extensively
 type CheckResult struct {
 	msg  string
 	code int
@@ -268,7 +276,7 @@ type RequestMetadata struct {
 }
 
 // Helper function to extract everything from *http.Request.
-func performHttpRequest(req *http.Request, client *http.Client, opts *commandOpts) (metadata *RequestMetadata, err error) {
+func performHTTPRequest(req *http.Request, client *http.Client, opts *commandOpts) (metadata *RequestMetadata, err error) {
 	if opts.Verbose {
 		reqDump, _ := httputil.DumpRequest(req, true)
 		log.Printf("request:\n%s", reqDump)
@@ -331,7 +339,7 @@ func performHttpRequest(req *http.Request, client *http.Client, opts *commandOpt
 // Check the body of the response for patterns.
 // If a status code / byte sequence / regex is wanted and is not present return an error.
 // If they are present, add them to the list of matches.
-func searchForPatterns(bodyBytes *capWriter, bodyString string, proto string, status string, opts commandOpts) (matches []string, err *CheckResult) {
+func searchForPatterns(bodyBytes *capWriter, bodyString, proto, status string, opts *commandOpts) (matches []string, err *CheckResult) {
 	statusLine := fmt.Sprintf("%s %s", proto, status)
 
 	// matched portions in the page
@@ -342,9 +350,9 @@ func searchForPatterns(bodyBytes *capWriter, bodyString string, proto string, st
 				fmt.Sprintf("HTTP CRITICAL - Invalid HTTP response received from host on port %d: %s", opts.Port, statusLine),
 				CRITICAL,
 			}
-		} else {
-			matches = append(matches, fmt.Sprintf(`Status line output "%s" matched "%s"`, statusLine, opts.Expect))
 		}
+
+		matches = append(matches, fmt.Sprintf(`Status line output %q matched %q`, statusLine, opts.Expect))
 	} else {
 		matches = append(matches, statusLine)
 	}
@@ -355,14 +363,13 @@ func searchForPatterns(bodyBytes *capWriter, bodyString string, proto string, st
 				fmt.Sprintf(`HTTP CRITICAL - HTTP response body Not matched %q from host on port %d`, string(opts.expectByte), opts.Port),
 				CRITICAL,
 			}
-		} else {
-			matches = append(matches, fmt.Sprintf(`Response body matched %q`, string(opts.expectByte)))
 		}
+
+		matches = append(matches, fmt.Sprintf(`Response body matched %q`, string(opts.expectByte)))
 	}
 
 	if opts.RegexStr != "" {
-		re := regexp.MustCompile(opts.RegexStr)
-
+		regex, err := regexp.Compile(opts.RegexStr)
 		if err != nil {
 			return matches, &CheckResult{
 				fmt.Sprintf(`Could not build case sensitive regex from option: '%s'`, opts.RegexStr),
@@ -370,20 +377,20 @@ func searchForPatterns(bodyBytes *capWriter, bodyString string, proto string, st
 			}
 		}
 
-		re_matched := re.FindStringSubmatch(bodyString)
-		if len(re_matched) == 0 {
+		regexMatched := regex.FindStringSubmatch(bodyString)
+		if len(regexMatched) == 0 {
 			return matches, &CheckResult{
 				fmt.Sprintf(`HTTP CRITICAL - HTTP response body did not match regex: '%s' from host: %s on port: %d`, opts.RegexStr, opts.Hostname, opts.Port),
 				CRITICAL,
 			}
 		}
 
-		matches = append(matches, re_matched...)
+		matches = append(matches, regexMatched...)
 	}
 
 	if opts.EregexStr != "" {
 		// as option add (%?) case insensitive
-		re, err := regexp.Compile("(?i)" + opts.EregexStr)
+		regex, err := regexp.Compile("(?i)" + opts.EregexStr)
 		if err != nil {
 			return matches, &CheckResult{
 				fmt.Sprintf(`Could not build case insensitive regex from option: '%s'`, opts.EregexStr),
@@ -391,22 +398,21 @@ func searchForPatterns(bodyBytes *capWriter, bodyString string, proto string, st
 			}
 		}
 
-		re_matched := re.FindStringSubmatch(bodyString)
-		if len(re_matched) == 0 {
+		regexMatched := regex.FindStringSubmatch(bodyString)
+		if len(regexMatched) == 0 {
 			return matches, &CheckResult{
 				fmt.Sprintf(`HTTP CRITICAL - HTTP response body did not match eregex: '%s' from host: %s on port: %d`, opts.EregexStr, opts.Hostname, opts.Port),
 				CRITICAL,
 			}
 		}
 
-		matches = append(matches, re_matched...)
+		matches = append(matches, regexMatched...)
 	}
 
 	return matches, nil
 }
 
 type clientRedirectError struct {
-	checkResult   *CheckResult
 	redirectedReq *http.Request
 	followOption  string
 	originalHost  string
@@ -437,7 +443,7 @@ func (e *clientRedirectError) Error() string {
 	return str
 }
 
-func clientRedirectErrorHandler(err clientRedirectError, meta *RequestMetadata, opts commandOpts) (checkResult *CheckResult, nextReq *http.Request) {
+func clientRedirectErrorHandler(err clientRedirectError, meta *RequestMetadata, opts *commandOpts) (checkResult *CheckResult, nextReq *http.Request) {
 	switch err.followOption {
 	case "":
 		return nil, nil
@@ -448,17 +454,20 @@ func clientRedirectErrorHandler(err clientRedirectError, meta *RequestMetadata, 
 	// HTTP OK: 302 Found - 215 bytes in 0.045 second response time |time=0.045s size=215B
 	case "ok":
 		return &CheckResult{
-			fmt.Sprintf("HTTP OK: %d - %d bytes in %.3f second response time | time=%.3f size=%dB", meta.res.StatusCode, meta.res.ContentLength, meta.duration.Seconds(), meta.duration.Seconds(), meta.res.ContentLength),
+			fmt.Sprintf("HTTP OK: %d - %d bytes in %.3f second response time | time=%.3f size=%dB",
+				meta.res.StatusCode, meta.res.ContentLength, meta.duration.Seconds(), meta.duration.Seconds(), meta.res.ContentLength),
 			OK,
 		}, nil
 	case "warning":
 		return &CheckResult{
-			fmt.Sprintf("HTTP WARNING: %d - %d bytes in %.3f second response time | time=%.3f size=%dB", meta.res.StatusCode, meta.res.ContentLength, meta.duration.Seconds(), meta.duration.Seconds(), meta.res.ContentLength),
+			fmt.Sprintf("HTTP WARNING: %d - %d bytes in %.3f second response time | time=%.3f size=%dB",
+				meta.res.StatusCode, meta.res.ContentLength, meta.duration.Seconds(), meta.duration.Seconds(), meta.res.ContentLength),
 			WARNING,
 		}, nil
 	case "critical":
 		return &CheckResult{
-			fmt.Sprintf("HTTP CRITICAL: %d - %d bytes in %.3f second response time | time=%.3f size=%dB", meta.res.StatusCode, meta.res.ContentLength, meta.duration.Seconds(), meta.duration.Seconds(), meta.res.ContentLength),
+			fmt.Sprintf("HTTP CRITICAL: %d - %d bytes in %.3f second response time | time=%.3f size=%dB",
+				meta.res.StatusCode, meta.res.ContentLength, meta.duration.Seconds(), meta.duration.Seconds(), meta.res.ContentLength),
 			CRITICAL,
 		}, nil
 	case "sticky", "stickyport":
@@ -558,7 +567,7 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 			}
 		}
 
-		meta, err = performHttpRequest(req, client, opts)
+		meta, err = performHTTPRequest(req, client, opts)
 		if err != nil {
 			return "", &CheckResult{
 				fmt.Sprintf("HTTP UNKNOWN - Error when performing request: %s", err),
@@ -567,7 +576,7 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 		}
 
 		if meta.redirectionErr != nil {
-			result, nextReq = clientRedirectErrorHandler(*meta.redirectionErr, meta, *opts)
+			result, nextReq = clientRedirectErrorHandler(*meta.redirectionErr, meta, opts)
 		}
 
 		req = nextReq
@@ -593,31 +602,48 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 		return "", reqErr
 	}
 
-	matches, reqErr := searchForPatterns(meta.buffer, meta.body, meta.res.Proto, meta.res.Status, *opts)
+	matches, reqErr := searchForPatterns(meta.buffer, meta.body, meta.res.Proto, meta.res.Status, opts)
 	if reqErr != nil {
 		return "", reqErr
 	}
 
 	statusLine := fmt.Sprintf("%s %s", meta.res.Proto, meta.res.Status)
-	meta.buffer.Write([]byte(statusLine + "\r\n\r\n"))
-	meta.res.Header.Write(meta.buffer)
 
-	okMsg = fmt.Sprintf(`HTTP OK - %s - %d bytes in %.3f second response time | time=%fs;;;0.000000 size=%dB;;;0`, strings.Join(matches, ", "), meta.buffer.Size(), meta.duration.Seconds(), meta.duration.Seconds(), meta.buffer.Size())
+	_, err = meta.buffer.Write([]byte(statusLine + "\r\n\r\n"))
+	if err != nil {
+		return "", &CheckResult{
+			fmt.Sprintf("HTTP UNKNOWN - Error when performing request: %s", err),
+			UNKNOWN,
+		}
+	}
+
+	err = meta.res.Header.Write(meta.buffer)
+	if err != nil {
+		return "", &CheckResult{
+			fmt.Sprintf("HTTP UNKNOWN - Error when performing request: %s", err),
+			UNKNOWN,
+		}
+	}
+
+	okMsg = fmt.Sprintf(`HTTP OK - %s - %d bytes in %.3f second response time | time=%fs;;;0.000000 size=%dB;;;0`,
+		strings.Join(matches, ", "), meta.buffer.Size(), meta.duration.Seconds(), meta.duration.Seconds(), meta.buffer.Size())
 
 	return okMsg, nil
 }
 
 // If the HTTP status code is erroneus, return a non-nil err.
-func handleErroneusReturnCodes(res *http.Response, opts *commandOpts, proto string, status string) (err *CheckResult) {
+func handleErroneusReturnCodes(res *http.Response, opts *commandOpts, proto, status string) (err *CheckResult) {
 	statusLine := fmt.Sprintf("%s %s", proto, status)
-	if 400 <= res.StatusCode && res.StatusCode < 500 {
+	// Between 400 and 500
+	if http.StatusBadRequest <= res.StatusCode && res.StatusCode < http.StatusInternalServerError {
 		return &CheckResult{
 			fmt.Sprintf("HTTP WARNING - Invalid HTTP response received from host on port %d: %s", opts.Port, statusLine),
 			WARNING,
 		}
 	}
 
-	if 500 <= res.StatusCode {
+	// Above 500
+	if http.StatusInternalServerError <= res.StatusCode {
 		return &CheckResult{
 			fmt.Sprintf("HTTP CRITICAL - Invalid HTTP response received from host on port %d: %s", opts.Port, statusLine),
 			CRITICAL,
@@ -629,7 +655,7 @@ func handleErroneusReturnCodes(res *http.Response, opts *commandOpts, proto stri
 
 // checkCertificate establishes a TLS connection to the server and validates the certificate
 // against the warning and critical thresholds. It returns immediately without checking the HTTP content.
-func checkCertificate(ctx context.Context, opts commandOpts, dialFunc func(ctx context.Context, _ string, _ string) (net.Conn, error), tlsConfig *tls.Config) *CheckResult {
+func checkCertificate(ctx context.Context, opts *commandOpts, dialFunc func(ctx context.Context, _ string, _ string) (net.Conn, error), tlsConfig *tls.Config) *CheckResult {
 	// For certificate checking, we need to set ServerName for SNI
 	if tlsConfig.ServerName == "" {
 		host, _, err := net.SplitHostPort(opts.Hostname)
@@ -650,9 +676,11 @@ func checkCertificate(ctx context.Context, opts commandOpts, dialFunc func(ctx c
 	defer conn.Close()
 
 	tlsConn := tls.Client(conn, tlsConfig)
-	if err := tlsConn.HandshakeContext(ctx); err != nil {
+
+	handshakeErr := tlsConn.HandshakeContext(ctx)
+	if handshakeErr != nil {
 		return &CheckResult{
-			fmt.Sprintf("HTTP CRITICAL - TLS handshake failed for host %s on port %d: %v", opts.IPAddress, opts.Port, err),
+			fmt.Sprintf("HTTP CRITICAL - TLS handshake failed for host %s on port %d: %v", opts.IPAddress, opts.Port, handshakeErr),
 			CRITICAL,
 		}
 	}
@@ -671,7 +699,7 @@ func checkCertificate(ctx context.Context, opts commandOpts, dialFunc func(ctx c
 	cert := certs[0]
 
 	expiry := cert.NotAfter
-	daysLeft := int(time.Until(expiry).Hours() / 24)
+	daysLeft := int(time.Until(expiry).Hours() / hoursInDays)
 
 	critDaysPerfStr := ""
 	if opts.certificateCritDays != nil {
@@ -681,7 +709,7 @@ func checkCertificate(ctx context.Context, opts commandOpts, dialFunc func(ctx c
 	var perfParts []string
 
 	for i, c := range certs {
-		chainDaysLeft := int(time.Until(c.NotAfter).Hours() / 24)
+		chainDaysLeft := int(time.Until(c.NotAfter).Hours() / hoursInDays)
 		if i == 0 {
 			perfParts = append(perfParts, fmt.Sprintf("expire=%dd;%d;%s;0", chainDaysLeft, opts.certificateWarnDays, critDaysPerfStr))
 		} else {
@@ -697,21 +725,23 @@ func checkCertificate(ctx context.Context, opts commandOpts, dialFunc func(ctx c
 	}
 
 	var result *CheckResult
-	if opts.certificateCritDays != nil && daysLeft <= *opts.certificateCritDays {
+
+	switch {
+	case opts.certificateCritDays != nil && daysLeft <= *opts.certificateCritDays:
 		result = &CheckResult{
 			fmt.Sprintf("HTTP CRITICAL - Certificate expiration for host %s on port %d: %s - %d days left%s | %s",
 				opts.Hostname, opts.Port, expiry.Format(time.RFC3339), daysLeft,
 				formatCertSubject(cert), perfData),
 			CRITICAL,
 		}
-	} else if daysLeft <= opts.certificateWarnDays {
+	case daysLeft <= opts.certificateWarnDays:
 		result = &CheckResult{
 			fmt.Sprintf("HTTP WARNING - Certificate expiration for host %s on port %d: %s - %d days left%s | %s",
 				opts.Hostname, opts.Port, expiry.Format(time.RFC3339), daysLeft,
 				formatCertSubject(cert), perfData),
 			WARNING,
 		}
-	} else {
+	default:
 		result = &CheckResult{
 			fmt.Sprintf("HTTP OK - Certificate expiration for host %s on port %d: %s - %d days left%s | %s",
 				opts.Hostname, opts.Port, expiry.Format(time.RFC3339), daysLeft,
@@ -723,6 +753,7 @@ func checkCertificate(ctx context.Context, opts commandOpts, dialFunc func(ctx c
 	return result
 }
 
+//nolint:gocognit,cyclo,funlen,maintidx //the main function has a lot of argument parsing
 func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 	opts := commandOpts{}
 	psr := flags.NewParser(&opts, flags.HelpFlag|flags.PassDoubleDash) // default flags without flags.PrintErrors
@@ -767,9 +798,9 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 	}
 
 	if opts.Base64ExpectContent != "" {
-		data, err := base64.StdEncoding.DecodeString(opts.Base64ExpectContent)
-		if err != nil {
-			fmt.Fprintf(output, "Failed decode base64-string: %v\n", err)
+		data, decodeErr := base64.StdEncoding.DecodeString(opts.Base64ExpectContent)
+		if decodeErr != nil {
+			fmt.Fprintf(output, "Failed decode base64-string: %v\n", decodeErr)
 
 			return UNKNOWN
 		}
@@ -800,8 +831,8 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 	}
 
 	if opts.IPAddress == "" {
-		host, _, err := net.SplitHostPort(opts.Hostname)
-		if err != nil {
+		host, _, splitErr := net.SplitHostPort(opts.Hostname)
+		if splitErr != nil {
 			opts.IPAddress = opts.Hostname
 		} else {
 			opts.IPAddress = host
@@ -809,8 +840,8 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 	}
 
 	if opts.Port == 0 {
-		_, port, err := net.SplitHostPort(opts.Hostname)
-		if err == nil {
+		_, port, splitErr := net.SplitHostPort(opts.Hostname)
+		if splitErr == nil {
 			p, _ := strconv.Atoi(port)
 			// skip error check OK
 			opts.Port = p
@@ -877,29 +908,29 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 
 		parseDays := func(str string) (int, error) {
 			var (
-				i   int64
-				err error
+				parsedInt int64
+				parseErr  error
 			)
 
 			if str == "" {
 				return 0, nil
 			}
 
-			i, err = strconv.ParseInt(str, 10, 32)
-			if err != nil {
-				return 0, err
+			parsedInt, parseErr = strconv.ParseInt(str, 10, 32)
+			if parseErr != nil {
+				return 0, parseErr
 			}
 
-			if i < 0 {
+			if parsedInt < 0 {
 				return 0, errors.New("days remaining cannot be a negative value")
 			}
 
-			return int(i), nil
+			return int(parsedInt), nil
 		}
 
-		warnDays, err := parseDays(splits[0])
-		if err != nil {
-			fmt.Fprintf(output, "Certificate check warning days could not be parsed: %s.\n", err.Error())
+		warnDays, parseWarnErr := parseDays(splits[0])
+		if parseWarnErr != nil {
+			fmt.Fprintf(output, "Certificate check warning days could not be parsed: %s.\n", parseWarnErr.Error())
 
 			return UNKNOWN
 		}
@@ -907,9 +938,9 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 		opts.certificateWarnDays = warnDays
 
 		if len(splits) == 2 {
-			critDays, err := parseDays(splits[1])
-			if err != nil {
-				fmt.Fprintf(output, "Certificate check critical days could not be parsed: %s.\n", err.Error())
+			critDays, parseCritErr := parseDays(splits[1])
+			if parseCritErr != nil {
+				fmt.Fprintf(output, "Certificate check critical days could not be parsed: %s.\n", parseCritErr.Error())
 
 				return UNKNOWN
 			}
@@ -925,7 +956,7 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 	}
 
 	// Build shared TLS config and dialer
-	tlsConfig := makeTlsConfig(opts)
+	tlsConfig := makeTLSConfig(&opts)
 	dialFunc := makeDialer(&opts)
 
 	// If certificate check is enabled, perform certificate validation and return
@@ -936,12 +967,12 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 			return UNKNOWN
 		}
 
-		timeout := opts.Timeout + 3*time.Second
+		timeout := opts.Timeout
 
-		ctx, cancel := context.WithTimeout(ctx, timeout)
+		certCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 
-		certResult := checkCertificate(ctx, opts, dialFunc, tlsConfig)
+		certResult := checkCertificate(certCtx, &opts, dialFunc, tlsConfig)
 		fmt.Fprintf(output, "%s\n", certResult.Error())
 
 		return certResult.Code()
@@ -962,7 +993,7 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 		Timeout: opts.Timeout,
 	}
 
-	timeout := opts.Timeout + 3*time.Second
+	timeout := opts.Timeout
 	if opts.WaitForMax > 0 {
 		timeout = opts.WaitForMax
 	}
@@ -981,7 +1012,8 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 
 			interval := opts.Interim
 
-			if reqErr == nil && consecutive <= 0 {
+			switch {
+			case reqErr == nil && consecutive <= 0:
 				if opts.Verbose {
 					log.Printf("request[%d]: %s", requestNum, okMsg)
 				}
@@ -989,13 +1021,13 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 				fmt.Fprint(output, okMsg)
 
 				return OK
-			} else if reqErr == nil {
+			case reqErr == nil:
 				consecutive--
 
 				if opts.Verbose {
 					log.Printf("request[%d]: %s", requestNum, okMsg)
 				}
-			} else {
+			default:
 				interval = opts.WaitForInterval
 
 				consecutive = opts.Consecutive - 1
@@ -1020,13 +1052,15 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 
 	var reqErr *CheckResult
 
+requestLoop:
 	for ctx.Err() == nil {
 		var okMsg string
 
 		requestNum++
 
 		okMsg, reqErr = request(ctx, client, &opts)
-		if reqErr == nil && consecutive <= 0 {
+		switch {
+		case reqErr == nil && consecutive <= 0:
 			if opts.Verbose {
 				log.Printf("request[%d]: %s", requestNum, okMsg)
 			}
@@ -1034,14 +1068,14 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 			fmt.Fprint(output, okMsg)
 
 			return OK
-		} else if reqErr == nil {
+		case reqErr == nil:
 			consecutive--
 
 			if opts.Verbose {
 				log.Printf("request[%d]: %s", requestNum, okMsg)
 			}
-		} else {
-			break
+		default:
+			break requestLoop
 		}
 
 		select {
