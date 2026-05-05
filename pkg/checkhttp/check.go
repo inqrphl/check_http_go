@@ -351,7 +351,7 @@ func searchForPatterns(bodyBytes *capWriter, bodyString string, proto string, st
 		re_matched := re.FindStringSubmatch(bodyString)
 		if len(re_matched) == 0 {
 			return matches, &CheckResult{
-				fmt.Sprintf(`HTTP CRITICAL - HTTP response body did not match regex: '%s' from host: %s on port: %d`, opts.RegexStr, string(opts.expectByte), opts.Hostname, opts.Port),
+				fmt.Sprintf(`HTTP CRITICAL - HTTP response body did not match regex: '%s' from host: %s on port: %d`, opts.RegexStr, opts.Hostname, opts.Port),
 				CRITICAL,
 			}
 		}
@@ -370,7 +370,7 @@ func searchForPatterns(bodyBytes *capWriter, bodyString string, proto string, st
 		re_matched := re.FindStringSubmatch(bodyString)
 		if len(re_matched) == 0 {
 			return matches, &CheckResult{
-				fmt.Sprintf(`HTTP CRITICAL - HTTP response body did not match regex: '%s' from host: %s on port: %d`, opts.RegexStr, string(opts.expectByte), opts.Hostname, opts.Port),
+				fmt.Sprintf(`HTTP CRITICAL - HTTP response body did not match eregex: '%s' from host: %s on port: %d`, opts.EregexStr, opts.Hostname, opts.Port),
 				CRITICAL,
 			}
 		}
