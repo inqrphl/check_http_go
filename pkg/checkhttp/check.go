@@ -76,7 +76,31 @@ type commandOpts struct {
 	expectByte          []byte
 }
 
-func makeTransport(opts commandOpts) (http.RoundTripper, error) {
+func makeTlsConfig(opts commandOpts) (conf *tls.Config) {
+	conf = &tls.Config{
+		InsecureSkipVerify: true,
+	}
+	if opts.SNI {
+		host, _, err := net.SplitHostPort(opts.Hostname)
+		if err != nil {
+			host = opts.Hostname
+		}
+		conf.ServerName = host
+	}
+
+	if opts.tlsMinVersion != 0 {
+		conf.MinVersion = opts.tlsMinVersion
+	}
+
+	if opts.tlsMaxVersion != 0 {
+		conf.MaxVersion = opts.tlsMaxVersion
+	}
+
+	return conf
+}
+
+// net.Dialer is for creating a TCP connection
+func makeDialer(opts commandOpts) func(ctx context.Context, _ string, _ string) (net.Conn, error) {
 	baseDialFunc := (&net.Dialer{
 		Timeout:   opts.Timeout,
 		KeepAlive: 30 * time.Second,
@@ -94,24 +118,14 @@ func makeTransport(opts commandOpts) (http.RoundTripper, error) {
 		return baseDialFunc(ctx, tcpMode, addr)
 	}
 
-	tlsConfig := &tls.Config{
-		InsecureSkipVerify: true,
-	}
-	if opts.SNI {
-		host, _, err := net.SplitHostPort(opts.Hostname)
-		if err != nil {
-			host = opts.Hostname
-		}
-		tlsConfig.ServerName = host
-	}
+	return dialFunc
+}
 
-	if opts.tlsMinVersion != 0 {
-		tlsConfig.MinVersion = opts.tlsMinVersion
-	}
+func makeTransport(opts commandOpts) (http.RoundTripper, error) {
 
-	if opts.tlsMaxVersion != 0 {
-		tlsConfig.MaxVersion = opts.tlsMaxVersion
-	}
+	dialFunc := makeDialer(opts)
+
+	tlsConfig := makeTlsConfig(opts)
 
 	proxy := http.ProxyFromEnvironment
 	if opts.Proxy != "" {
