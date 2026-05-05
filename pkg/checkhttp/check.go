@@ -425,17 +425,17 @@ func clientRedirectErrorHandler(err clientRedirectError, meta *RequestMetadata, 
 	case err.followOption == "ok":
 		return &CheckResult{
 			fmt.Sprintf("HTTP OK: %d - %d bytes in %.3f second response time | time=%.3f size=%dB", meta.res.StatusCode, meta.res.ContentLength, meta.duration.Seconds(), meta.duration.Seconds(), meta.res.ContentLength),
-			0,
+			OK,
 		}, nil
 	case err.followOption == "warning":
 		return &CheckResult{
 			fmt.Sprintf("HTTP WARNING: %d - %d bytes in %.3f second response time | time=%.3f size=%dB", meta.res.StatusCode, meta.res.ContentLength, meta.duration.Seconds(), meta.duration.Seconds(), meta.res.ContentLength),
-			0,
+			WARNING,
 		}, nil
 	case err.followOption == "critical":
 		return &CheckResult{
 			fmt.Sprintf("HTTP CRITICAL: %d - %d bytes in %.3f second response time | time=%.3f size=%dB", meta.res.StatusCode, meta.res.ContentLength, meta.duration.Seconds(), meta.duration.Seconds(), meta.res.ContentLength),
-			0,
+			CRITICAL,
 		}, nil
 	case err.followOption == "sticky", err.followOption == "stickyport":
 		nextReq = err.redirectedReq
