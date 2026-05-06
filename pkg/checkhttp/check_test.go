@@ -113,8 +113,8 @@ func TestCertificateCheckWarn3Days(t *testing.T) {
 		t.Errorf("expected output to contain 'HTTP OK'")
 	}
 
-	if !strings.Contains(output.String(), "days_chain_elem0=") {
-		t.Errorf("expected perfdata to contain 'days_chain_elem0='")
+	if !strings.Contains(output.String(), "days_chain_elem1=") {
+		t.Errorf("expected perfdata to contain 'days_chain_elem1='")
 	}
 }
 
@@ -296,12 +296,12 @@ func TestCertificateChainPerfdata(t *testing.T) {
 		t.Errorf("expected exit code OK (0), got %d", code)
 	}
 
-	if !strings.Contains(output.String(), "days_chain_elem0=") {
-		t.Errorf("expected perfdata to contain 'days_chain_elem0='")
+	if !strings.Contains(output.String(), "days_chain_elem1=") {
+		t.Errorf("expected perfdata to contain 'days_chain_elem1='")
 	}
 
-	if !strings.Contains(output.String(), "days_chain_elem1=") {
-		t.Errorf("expected perfdata to contain 'days_chain_elem1=' for chain cert")
+	if !strings.Contains(output.String(), "days_chain_elem2=") {
+		t.Errorf("expected perfdata to contain 'days_chain_elem2=' for chain cert")
 	}
 }
 
