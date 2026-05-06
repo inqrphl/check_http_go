@@ -37,10 +37,9 @@ func (w *capWriter) Bytes() []byte {
 
 //nolint:errname // The original author used it as an error type extensively
 type CheckResult struct {
-	msg  string
-	code int
-	// used for comparing subchecks to present most important one first
 	resultImportance *int
+	msg              string
+	code             int
 }
 
 func (e *CheckResult) Error() string {
@@ -56,16 +55,18 @@ type CheckResultPQ []*CheckResult
 
 func (pq *CheckResultPQ) Len() int { return len(*pq) }
 
-// In a heap, the most - less element is on top
-// The highest severity (CRITICAL > WARNING > OK) is more important so it wins the "less" comparison
-// If severities are equal, check resultImportance, who has lower is more important and wins the "less" comparison
-func (pq *CheckResultPQ) Less(i, j int) bool {
-	if (*pq)[i].Code() != (*pq)[j].Code() {
-		return (*pq)[i].Code() > (*pq)[j].Code()
+// Less: In a heap, the elemement that is most "less" compared to others is on top.
+// The highest severity (CRITICAL > WARNING > OK) is more important so it wins the "less" comparison.
+// If severities are equal, check resultImportance, who has lower resultImportnace is deemed more important and wins the "less" comparison.
+func (pq *CheckResultPQ) Less(item1, item2 int) bool {
+	if (*pq)[item1].Code() != (*pq)[item2].Code() {
+		return (*pq)[item1].Code() > (*pq)[item2].Code()
 	}
-	if (*pq)[i].resultImportance != nil && (*pq)[j].resultImportance != nil {
-		return *((*pq)[i].resultImportance) < *((*pq)[j].resultImportance)
+
+	if (*pq)[item1].resultImportance != nil && (*pq)[item2].resultImportance != nil {
+		return *((*pq)[item1].resultImportance) < *((*pq)[item2].resultImportance)
 	}
+
 	return true
 }
 

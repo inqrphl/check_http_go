@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"strings"
@@ -13,7 +14,7 @@ import (
 	"unicode/utf8"
 )
 
-// Issues that are more important to display have lower importance numbers
+// Issues that are more important to display have lower importance numbers.
 const (
 	resultImportancePerLevel         = 100
 	notAfterImportanceLevel          = 51
@@ -23,9 +24,9 @@ const (
 	commonNameImportance             = 55
 )
 
-// checkCertificate establishes a TLS connection to the server and validates the certificate
-// against the warning and critical thresholds. It returns immediately without checking the HTTP content.
-func checkCertificate(ctx context.Context, opts *commandOpts, dialFunc func(ctx context.Context, _ string, _ string) (net.Conn, error), tlsConfig *tls.Config) *CheckResult {
+// checkCertificate establishes a TLS connection to the server and validates the certificate against the warning and critical thresholds.
+// It returns immediately without checking the HTTP content.
+func checkCertificate(ctx context.Context, output io.Writer, opts *commandOpts, dialFunc func(ctx context.Context, _ string, _ string) (net.Conn, error), tlsConfig *tls.Config) *CheckResult {
 	// For certificate checking, we need to set ServerName for SNI
 	if tlsConfig.ServerName == "" {
 		host, _, err := net.SplitHostPort(opts.Hostname)
@@ -39,9 +40,9 @@ func checkCertificate(ctx context.Context, opts *commandOpts, dialFunc func(ctx 
 	conn, err := dialFunc(ctx, "", "")
 	if err != nil {
 		return &CheckResult{
+			nil,
 			fmt.Sprintf("HTTP CRITICAL - Error connecting to host %s on port %d: %v", opts.IPAddress, opts.Port, err),
 			CRITICAL,
-			nil,
 		}
 	}
 	defer conn.Close()
@@ -51,18 +52,18 @@ func checkCertificate(ctx context.Context, opts *commandOpts, dialFunc func(ctx 
 	handshakeErr := tlsConn.HandshakeContext(ctx)
 	if handshakeErr != nil {
 		return &CheckResult{
+			nil,
 			fmt.Sprintf("HTTP CRITICAL - TLS handshake failed for host %s on port %d: %v", opts.IPAddress, opts.Port, handshakeErr),
 			CRITICAL,
-			nil,
 		}
 	}
 
 	certs := tlsConn.ConnectionState().PeerCertificates
 	if len(certs) == 0 {
 		return &CheckResult{
+			nil,
 			fmt.Sprintf("HTTP CRITICAL - No certificate returned from host %s on port %d", opts.IPAddress, opts.Port),
 			CRITICAL,
-			nil,
 		}
 	}
 
@@ -71,12 +72,14 @@ func checkCertificate(ctx context.Context, opts *commandOpts, dialFunc func(ctx 
 	// certs[n] is the root certificate. this is either from the web browser / system
 	// use a dedicated function to check the chain, the logic is too long
 
-	return checkCertificateChain(opts, certs)
+	return checkCertificateChain(output, opts, certs)
 }
 
 // The main inspiration is from https://github.com/matteocorti/check_ssl_cert.
 // That project has many options, this function implements only a subset of them.
-func checkCertificateChain(opts *commandOpts, certs []*x509.Certificate) *CheckResult {
+//
+//nolint:gocognit,funlen // the function logic is simple
+func checkCertificateChain(output io.Writer, opts *commandOpts, certs []*x509.Certificate) *CheckResult {
 	// OK - Certificate 'se1-mon-q001.sys.schwarz' will expire on Sat 27 May 2028 04:55:09 PM GMT +0000 (expires in X days)
 	const customTimeLayout = "Mon 02 Jan 2006 03:04:05 PM MST -0700"
 
@@ -139,11 +142,13 @@ func checkCertificateChain(opts *commandOpts, certs []*x509.Certificate) *CheckR
 	}
 
 	subchecks := []*CheckResult{}
+
 	for resultsPQ.Len() > 0 {
 		top, ok := heap.Pop(resultsPQ).(*CheckResult)
 		if !ok {
 			break
 		}
+
 		subchecks = append(subchecks, top)
 	}
 
@@ -153,15 +158,16 @@ func checkCertificateChain(opts *commandOpts, certs []*x509.Certificate) *CheckR
 			if subcheck.resultImportance != nil {
 				importanceStr = strconv.FormatInt(int64(*subcheck.resultImportance), 10)
 			}
-			fmt.Printf("subcheck %d\ncode: %d | importance: %s | msg: %s\n", sIdx, subcheck.code, importanceStr, subcheck.msg)
+
+			fmt.Fprintf(output, "subcheck %d\ncode: %d | importance: %s | msg: %s\n", sIdx, subcheck.code, importanceStr, subcheck.msg)
 		}
 	}
 
 	if len(subchecks) == 0 {
 		return &CheckResult{
+			nil,
 			"HTTP UNKNOWN - Internal error during certificate check: unexpected type in priority queue",
 			UNKNOWN,
-			nil,
 		}
 	}
 
@@ -185,6 +191,8 @@ func formatCertSubject(cert *x509.Certificate) string {
 // validHostname reports whether host is a valid hostname that can be matched or
 // matched against according to RFC 6125 2.2, with some leniency to accommodate
 // legacy values.
+//
+//nolint:all // taken from the standard library, not going to change the function
 func validHostname(host string, isPattern bool) bool {
 	if !isPattern {
 		host = strings.TrimSuffix(host, ".")
@@ -236,6 +244,8 @@ func validHostname(host string, isPattern bool) bool {
 
 // taken from: /usr/local/go/src/crypto/x509/verify.go as it was not exported
 // Useful for checking CommonName
+//
+//nolint:all // taken from the standard library, not going to change the function
 func matchHostnames(pattern, host string) bool {
 	pattern = toLowerCaseASCII(pattern)
 	host = toLowerCaseASCII(strings.TrimSuffix(host, "."))
@@ -267,6 +277,8 @@ func matchHostnames(pattern, host string) bool {
 // toLowerCaseASCII returns a lower-case version of in. See RFC 6125 6.4.1. We use
 // an explicitly ASCII function to avoid any sharp corners resulting from
 // performing Unicode operations on DNS labels.
+//
+//nolint:all // taken from the standard library, not going to change the function
 func toLowerCaseASCII(in string) string {
 	// If the string is already lower-case then there's nothing to do.
 	isAlreadyLowerCase := true
@@ -301,39 +313,40 @@ func pushCommonNameCheck(cert *x509.Certificate, hostname string, index int, res
 
 	if cert.IsCA {
 		heap.Push(resultsPQ, &CheckResult{
+			&resultImportance,
 			fmt.Sprintf("HTTP OK - x509 certificate %s is a CA certificate, skipping common name check for hostname %q",
 				formatCertSubject(cert), hostname),
 			OK,
-			&resultImportance,
 		})
+
 		return
 	}
 
 	cnIsValid := validHostname(cert.Subject.CommonName, false) || validHostname(hostname, true)
 	if !cnIsValid {
 		heap.Push(resultsPQ, &CheckResult{
+			&resultImportance,
 			fmt.Sprintf("HTTP CRITICAL - x509 certificate %s has common name %q, which is not a valid pattern for a common name",
 				formatCertSubject(cert), cert.Subject.CommonName),
 			CRITICAL,
-			&resultImportance,
 		})
 	}
 
 	cnMatchesHostname := matchHostnames(cert.Subject.CommonName, hostname)
 	if !cnMatchesHostname {
 		heap.Push(resultsPQ, &CheckResult{
+			&resultImportance,
 			fmt.Sprintf("HTTP CRITICAL - x509 certificate %s has common name %q, which does not match hostname %q",
 				formatCertSubject(cert), cert.Subject.CommonName, hostname),
 			CRITICAL,
-			&resultImportance,
 		})
 	}
 
 	heap.Push(resultsPQ, &CheckResult{
+		&resultImportance,
 		fmt.Sprintf("HTTP OK - x509 certificate %s has common name %q, which matches hostname %q",
 			formatCertSubject(cert), cert.Subject.CommonName, hostname),
 		OK,
-		&resultImportance,
 	})
 }
 
@@ -344,11 +357,12 @@ func pushSubjectAlternativeNameCheck(cert *x509.Certificate, hostname string, in
 
 	if cert.IsCA {
 		heap.Push(resultsPQ, &CheckResult{
+			&resultImportance,
 			fmt.Sprintf("HTTP OK - x509 certificate %s is a CA certificate, skipping SAN check for hostname %q - (IP SANs: %v, DNS SANs: %v)",
 				formatCertSubject(cert), hostname, cert.IPAddresses, cert.DNSNames),
 			OK,
-			&resultImportance,
 		})
+
 		return
 	}
 
@@ -358,20 +372,20 @@ func pushSubjectAlternativeNameCheck(cert *x509.Certificate, hostname string, in
 	err := cert.VerifyHostname(hostname)
 	if err != nil {
 		heap.Push(resultsPQ, &CheckResult{
+			&resultImportance,
 			fmt.Sprintf("HTTP CRITICAL - x509 certificate %s has IP/DNS SANs that do not match hostname %q - (IP SANs: %v, DNS SANs: %v)",
 				formatCertSubject(cert), hostname, cert.IPAddresses, cert.DNSNames),
 			CRITICAL,
-			&resultImportance,
 		})
 
 		return
 	}
 
 	heap.Push(resultsPQ, &CheckResult{
+		&resultImportance,
 		fmt.Sprintf("HTTP OK - x509 certificate %s has IP/DNS SANs that match hostname %q - (IP SANs: %v, DNS SANs: %v)",
 			formatCertSubject(cert), hostname, cert.IPAddresses, cert.DNSNames),
 		OK,
-		&resultImportance,
 	})
 }
 
@@ -385,24 +399,24 @@ func pushNotAfterCheck(cert *x509.Certificate, opts *commandOpts, index int, tim
 	switch {
 	case opts.certificateCritDays != nil && daysLeft <= *opts.certificateCritDays:
 		heap.Push(resultsPQ, &CheckResult{
+			&resultImportance,
 			fmt.Sprintf("HTTP CRITICAL - x509 certificate %s is valid until %s (expires in %d days)",
 				formatCertSubject(cert), expiry.Format(timeLayout), daysLeft),
 			CRITICAL,
-			&resultImportance,
 		})
 	case daysLeft <= opts.certificateWarnDays:
 		heap.Push(resultsPQ, &CheckResult{
+			&resultImportance,
 			fmt.Sprintf("HTTP WARNING - x509 certificate %s is valid until %s (expires in %d days)",
 				formatCertSubject(cert), expiry.Format(timeLayout), daysLeft),
 			WARNING,
-			&resultImportance,
 		})
 	default:
 		heap.Push(resultsPQ, &CheckResult{
+			&resultImportance,
 			fmt.Sprintf("HTTP OK - x509 certificate %s is valid until %s (expires in %d days)",
 				formatCertSubject(cert), expiry.Format(timeLayout), daysLeft),
 			OK,
-			&resultImportance,
 		})
 	}
 }
@@ -416,24 +430,24 @@ func pushSignatureCheck(cert *x509.Certificate, index int, resultsPQ *CheckResul
 	switch cert.SignatureAlgorithm {
 	case x509.MD2WithRSA, x509.MD5WithRSA:
 		heap.Push(resultsPQ, &CheckResult{
+			&resultImportance,
 			fmt.Sprintf("HTTP CRITICAL - x509 certificate %s uses weak signature algorithm %s",
 				formatCertSubject(cert), sigAlgo),
 			CRITICAL,
-			&resultImportance,
 		})
 	case x509.SHA1WithRSA:
 		heap.Push(resultsPQ, &CheckResult{
+			&resultImportance,
 			fmt.Sprintf("HTTP WARNING - x509 certificate %s uses deprecated SHA1 signature algorithm %s",
 				formatCertSubject(cert), sigAlgo),
 			WARNING,
-			&resultImportance,
 		})
 	default:
 		heap.Push(resultsPQ, &CheckResult{
+			&resultImportance,
 			fmt.Sprintf("HTTP OK - x509 certificate %s uses strong signature algorithm %s",
 				formatCertSubject(cert), sigAlgo),
 			OK,
-			&resultImportance,
 		})
 	}
 }
@@ -445,19 +459,19 @@ func pushNotBeforeCheck(cert *x509.Certificate, index int, timeLayout string, re
 	notBefore := cert.NotBefore
 	if time.Now().Before(notBefore) {
 		heap.Push(resultsPQ, &CheckResult{
+			&resultImportance,
 			fmt.Sprintf("HTTP CRITICAL - x509 certificate %s has its validity start time in the future (valid from %s)",
 				formatCertSubject(cert), notBefore.Format(timeLayout)),
 			CRITICAL,
-			&resultImportance,
 		})
 
 		return
 	}
 
 	heap.Push(resultsPQ, &CheckResult{
+		&resultImportance,
 		fmt.Sprintf("HTTP OK - x509 certificate %s has its validity start time in the past (valid from %s)",
 			formatCertSubject(cert), notBefore.Format(timeLayout)),
 		OK,
-		&resultImportance,
 	})
 }
