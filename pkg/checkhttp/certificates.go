@@ -89,13 +89,15 @@ func checkCertificateChain(opts *commandOpts, certs []*x509.Certificate) *CheckR
 
 	for idx, cert := range certs {
 		shouldCheck := idx == 0 || !opts.IgnoreCertificateChain
+		// the output of the check_ssl_cert tool indexes from 1
+		perfIndex := idx + 1
 
 		// Expiry check and perfdata.
 		expiry := cert.NotAfter
 		daysLeft := int(time.Until(expiry).Hours() / hoursInDays)
 
 		if shouldCheck {
-			perfParts = append(perfParts, fmt.Sprintf("days_chain_elem%d=%dd;%d;%s;0", idx, daysLeft, opts.certificateWarnDays, critDaysPerfStr))
+			perfParts = append(perfParts, fmt.Sprintf("days_chain_elem%d=%dd;%d;%s;0", perfIndex, daysLeft, opts.certificateWarnDays, critDaysPerfStr))
 
 			// The flag is false by default, it has to be manually toggled
 			if opts.DontIgnoreHostCN {
@@ -119,7 +121,7 @@ func checkCertificateChain(opts *commandOpts, certs []*x509.Certificate) *CheckR
 				pushSignatureCheck(cert, opts, idx, resultsPQ)
 			}
 		} else {
-			perfParts = append(perfParts, fmt.Sprintf("days_chain_elem%d=%dd;;;0", idx, daysLeft))
+			perfParts = append(perfParts, fmt.Sprintf("days_chain_elem%d=%dd;;;0", perfIndex, daysLeft))
 		}
 	}
 
