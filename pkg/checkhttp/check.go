@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -41,8 +40,8 @@ const (
 	hoursInDays = 24
 )
 
-// this struct is big, order fields from big to small and avoid wasting space due to memory packing
-// govet complains otherwise
+// this struct is big, order fields from big to small and avoid wasting space due to memory packing.
+// govet complains otherwise.
 type commandOpts struct {
 	certificateCritDays *int
 	Hostname            string `short:"H" long:"hostname" description:"Host name using Host headers"`
@@ -63,29 +62,30 @@ type commandOpts struct {
 	RegexStr      string `long:"regex" description:"Search page for case-sensitive regex string"`
 	EregexStr     string `long:"eregex" description:"Search page for case-insensitive regex string"`
 	//nolint:staticcheck // SA5008: multiple "choice" tags are required by our CLI parser
-	Follow              string `long:"follow" description:"Redirection method" choice:"ok" choice:"warning" choice:"critical" choice:"follow" choice:"sticky" choice:"stickyport"`
-	MaxBufferSize       string `long:"max-buffer-size" default:"1MB" description:"Max buffer size to read response body"`
-	expectByte          []byte
-	WaitForInterval     time.Duration `long:"wait-for-interval" default:"2s" description:"retry interval"`
-	WaitForMax          time.Duration `long:"wait-for-max" description:"time to wait for success"`
-	Consecutive         int           `long:"consecutive" default:"1" description:"number of consecutive successful requests required"`
-	Port                int           `short:"p" long:"port" description:"Port number"`
-	certificateWarnDays int
-	MaxRedirects        int           `long:"max-redirs" description:"Maximum redirects before giving up on following"`
-	Interim             time.Duration `long:"interim" default:"1s" description:"interval time after successful request for consecutive mode"`
-	bufferSize          uint64
-	Timeout             time.Duration `short:"t" long:"timeout" default:"10s" description:"Timeout to wait for connection"`
-	tlsMaxVersion       uint16
-	tlsMinVersion       uint16
-	NoDiscard           bool `long:"no-discard" description:"raise error when the response body is larger then max-buffer-size"`
-	WaitFor             bool `long:"wait-for" description:"retry until successful when enabled"`
-	SSL                 bool `short:"S" long:"ssl" description:"use https"`
-	SNI                 bool `long:"sni" description:"enable SNI"`
-	TCP4                bool `short:"4" description:"use tcp4 only"`
-	TCP6                bool `short:"6" description:"use tcp6 only"`
-	Version             bool `short:"V" long:"version" description:"Show version"`
-	Verbose             bool `short:"v" long:"verbose" description:"Show verbose output"`
-	ShowBody            bool `long:"show-body" description:"Print body content bellow status line"`
+	Follow                 string `long:"follow" description:"Redirection method" choice:"ok" choice:"warning" choice:"critical" choice:"follow" choice:"sticky" choice:"stickyport"`
+	MaxBufferSize          string `long:"max-buffer-size" default:"1MB" description:"Max buffer size to read response body"`
+	expectByte             []byte
+	WaitForInterval        time.Duration `long:"wait-for-interval" default:"2s" description:"retry interval"`
+	WaitForMax             time.Duration `long:"wait-for-max" description:"time to wait for success"`
+	Consecutive            int           `long:"consecutive" default:"1" description:"number of consecutive successful requests required"`
+	Port                   int           `short:"p" long:"port" description:"Port number"`
+	certificateWarnDays    int
+	MaxRedirects           int           `long:"max-redirs" description:"Maximum redirects before giving up on following"`
+	Interim                time.Duration `long:"interim" default:"1s" description:"interval time after successful request for consecutive mode"`
+	bufferSize             uint64
+	Timeout                time.Duration `short:"t" long:"timeout" default:"10s" description:"Timeout to wait for connection"`
+	tlsMaxVersion          uint16
+	tlsMinVersion          uint16
+	NoDiscard              bool `long:"no-discard" description:"raise error when the response body is larger then max-buffer-size"`
+	WaitFor                bool `long:"wait-for" description:"retry until successful when enabled"`
+	SSL                    bool `short:"S" long:"ssl" description:"use https"`
+	SNI                    bool `long:"sni" description:"enable SNI"`
+	TCP4                   bool `short:"4" description:"use tcp4 only"`
+	TCP6                   bool `short:"6" description:"use tcp6 only"`
+	Version                bool `short:"V" long:"version" description:"Show version"`
+	Verbose                bool `short:"v" long:"verbose" description:"Show verbose output"`
+	ShowBody               bool `long:"show-body" description:"Print body content bellow status line"`
+	IgnoreCertificateChain bool `long:"ignore-certificate-chain" description:"by default all certificates are checked for given thresholds. this option only checks the leaf certificate."`
 }
 
 func makeTLSConfig(opts *commandOpts) (conf *tls.Config) {
@@ -607,106 +607,6 @@ func handleErroneusReturnCodes(res *http.Response, opts *commandOpts, proto, sta
 	}
 
 	return nil
-}
-
-// checkCertificate establishes a TLS connection to the server and validates the certificate
-// against the warning and critical thresholds. It returns immediately without checking the HTTP content.
-func checkCertificate(ctx context.Context, opts *commandOpts, dialFunc func(ctx context.Context, _ string, _ string) (net.Conn, error), tlsConfig *tls.Config) *CheckResult {
-	// For certificate checking, we need to set ServerName for SNI
-	if tlsConfig.ServerName == "" {
-		host, _, err := net.SplitHostPort(opts.Hostname)
-		if err != nil {
-			host = opts.Hostname
-		}
-
-		tlsConfig.ServerName = host
-	}
-
-	conn, err := dialFunc(ctx, "", "")
-	if err != nil {
-		return &CheckResult{
-			fmt.Sprintf("HTTP CRITICAL - Error connecting to host %s on port %d: %v", opts.IPAddress, opts.Port, err),
-			CRITICAL,
-		}
-	}
-	defer conn.Close()
-
-	tlsConn := tls.Client(conn, tlsConfig)
-
-	handshakeErr := tlsConn.HandshakeContext(ctx)
-	if handshakeErr != nil {
-		return &CheckResult{
-			fmt.Sprintf("HTTP CRITICAL - TLS handshake failed for host %s on port %d: %v", opts.IPAddress, opts.Port, handshakeErr),
-			CRITICAL,
-		}
-	}
-
-	certs := tlsConn.ConnectionState().PeerCertificates
-	if len(certs) == 0 {
-		return &CheckResult{
-			fmt.Sprintf("HTTP CRITICAL - No certificate returned from host %s on port %d", opts.IPAddress, opts.Port),
-			CRITICAL,
-		}
-	}
-
-	// certs[0] is the leaf certificate, the certificate belonging to the site that we are visitng
-	// certs[1..n-1] are the intermediate certificates sign each other and go up in scope
-	// certs[n] is the root certificate. this is either from the web browser / system
-	cert := certs[0]
-
-	expiry := cert.NotAfter
-	daysLeft := int(time.Until(expiry).Hours() / hoursInDays)
-
-	critDaysPerfStr := ""
-	if opts.certificateCritDays != nil {
-		critDaysPerfStr = strconv.Itoa(*opts.certificateCritDays)
-	}
-
-	var perfParts []string
-
-	for i, c := range certs {
-		chainDaysLeft := int(time.Until(c.NotAfter).Hours() / hoursInDays)
-		if i == 0 {
-			perfParts = append(perfParts, fmt.Sprintf("expire=%dd;%d;%s;0", chainDaysLeft, opts.certificateWarnDays, critDaysPerfStr))
-		} else {
-			perfParts = append(perfParts, fmt.Sprintf("expire_chain_%d=%dd;;;0", i, chainDaysLeft))
-		}
-	}
-
-	perfData := strings.Join(perfParts, " ")
-
-	// formatCertSubject returns a formatted string with the certificate subject details
-	formatCertSubject := func(cert *x509.Certificate) string {
-		return fmt.Sprintf(" (subject: %s, issuer: %s)", cert.Subject.CommonName, cert.Issuer.CommonName)
-	}
-
-	var result *CheckResult
-
-	switch {
-	case opts.certificateCritDays != nil && daysLeft <= *opts.certificateCritDays:
-		result = &CheckResult{
-			fmt.Sprintf("HTTP CRITICAL - Certificate expiration for host %s on port %d: %s - %d days left%s | %s",
-				opts.Hostname, opts.Port, expiry.Format(time.RFC3339), daysLeft,
-				formatCertSubject(cert), perfData),
-			CRITICAL,
-		}
-	case daysLeft <= opts.certificateWarnDays:
-		result = &CheckResult{
-			fmt.Sprintf("HTTP WARNING - Certificate expiration for host %s on port %d: %s - %d days left%s | %s",
-				opts.Hostname, opts.Port, expiry.Format(time.RFC3339), daysLeft,
-				formatCertSubject(cert), perfData),
-			WARNING,
-		}
-	default:
-		result = &CheckResult{
-			fmt.Sprintf("HTTP OK - Certificate expiration for host %s on port %d: %s - %d days left%s | %s",
-				opts.Hostname, opts.Port, expiry.Format(time.RFC3339), daysLeft,
-				formatCertSubject(cert), perfData),
-			OK,
-		}
-	}
-
-	return result
 }
 
 //nolint:gocognit,cyclo,funlen,maintidx //the main function has a lot of argument parsing
