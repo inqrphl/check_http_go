@@ -62,7 +62,7 @@ type commandOpts struct {
 	RegexStr      string `long:"regex" description:"Search page for case-sensitive regex string"`
 	EregexStr     string `long:"eregex" description:"Search page for case-insensitive regex string"`
 	//nolint:staticcheck // SA5008: multiple "choice" tags are required by our CLI parser
-	Follow                   string `long:"follow" description:"Redirection method" choice:"ok" choice:"warning" choice:"critical" choice:"follow" choice:"sticky" choice:"stickyport"`
+	Onredirect               string `long:"onredirect" description:"What strategy to use when encountering a redirect. ok/warning/critical returns immediately. follow uses the new URL returned by golang HTTP client. Sticky keeps the IP to be same after redirect, and stickyport persists the port as well." choice:"ok" choice:"warning" choice:"critical" choice:"follow" choice:"sticky" choice:"stickyport"`
 	MaxBufferSize            string `long:"max-buffer-size" default:"1MB" description:"Max buffer size to read response body"`
 	expectByte               []byte
 	WaitForInterval          time.Duration `long:"wait-for-interval" default:"2s" description:"retry interval"`
@@ -253,7 +253,6 @@ func performHTTPRequest(req *http.Request, client *http.Client, opts *commandOpt
 			if clientRedirectErr, ok := errors.AsType[*clientRedirectError](urlErr.Err); ok {
 				// this is not really an error, we pack information into this error struct
 				// the code acts according to the chosen follow strategy
-				log.Printf("Found a clientRedirectError")
 
 				redirectionErr = clientRedirectErr
 			} else {
@@ -486,7 +485,7 @@ func clientRedirectErrorHandler(err clientRedirectError, meta *RequestMetadata, 
 // This function is used to continue following, or encapsulate the follow strategy in an custom error type.
 func clientRedirectHandler(req *http.Request, via []*http.Request, opts *commandOpts) (err error) {
 	clientHandlerErr := &clientRedirectError{
-		followOption:  opts.Follow,
+		followOption:  opts.Onredirect,
 		redirectedReq: req,
 	}
 	if len(via) > 0 {
@@ -500,7 +499,7 @@ func clientRedirectHandler(req *http.Request, via []*http.Request, opts *command
 
 	clientHandlerErr.originalPort = opts.Port
 
-	switch opts.Follow {
+	switch opts.Onredirect {
 	case "":
 		// following is not enabled by default
 		clientHandlerErr.stopRedirect = true
@@ -508,7 +507,7 @@ func clientRedirectHandler(req *http.Request, via []*http.Request, opts *command
 		return nil
 	case "ok", "warning", "critical", "sticky", "stickyport":
 	default:
-		return fmt.Errorf("Unknown/Unsupported follow option: %s", opts.Follow)
+		return fmt.Errorf("Unknown/Unsupported follow option: %s", opts.Onredirect)
 	}
 
 	return clientHandlerErr
