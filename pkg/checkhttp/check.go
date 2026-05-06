@@ -53,7 +53,7 @@ type commandOpts struct {
 	Base64ExpectContent string `long:"base64-string" description:"Base64 Encoded string to expect the content"`
 	UserAgent           string `short:"A" long:"useragent" default:"check_http" description:"UserAgent to be sent"`
 	Authorization       string `short:"a" long:"authorization" description:"username:password on sites with basic authentication"`
-	Certificate         string `short:"C" long:"certificate" description:"check certificates instead of content. Specified in days left to warn and optionally crit: <warn_days>[,<crit_days>]" `
+	Certificate         string `short:"C" long:"certificate" description:"check certificates instead of content. Specified in mandatory days left to warn and optional days to crit with a comma: warn_days[,<crit_days>]" `
 	//nolint:staticcheck,lll // SA5008: multiple "choice" tags are required by our CLI parser. The line is long due to a lot of possible choices.
 	TLSMinVersion string `long:"tls-min" description:"minimum supported TLS version. Values with plus set the max tls version as well to latest version: 1.3" choice:"1.0" choice:"1.0+" choice:"1.1" choice:"1.1+" choice:"1.2" choice:"1.2+" choice:"1.3"`
 	//nolint:staticcheck // SA5008: multiple "choice" tags are required by our CLI parser
@@ -62,30 +62,35 @@ type commandOpts struct {
 	RegexStr      string `long:"regex" description:"Search page for case-sensitive regex string"`
 	EregexStr     string `long:"eregex" description:"Search page for case-insensitive regex string"`
 	//nolint:staticcheck // SA5008: multiple "choice" tags are required by our CLI parser
-	Follow                 string `long:"follow" description:"Redirection method" choice:"ok" choice:"warning" choice:"critical" choice:"follow" choice:"sticky" choice:"stickyport"`
-	MaxBufferSize          string `long:"max-buffer-size" default:"1MB" description:"Max buffer size to read response body"`
-	expectByte             []byte
-	WaitForInterval        time.Duration `long:"wait-for-interval" default:"2s" description:"retry interval"`
-	WaitForMax             time.Duration `long:"wait-for-max" description:"time to wait for success"`
-	Consecutive            int           `long:"consecutive" default:"1" description:"number of consecutive successful requests required"`
-	Port                   int           `short:"p" long:"port" description:"Port number"`
-	certificateWarnDays    int
-	MaxRedirects           int           `long:"max-redirs" description:"Maximum redirects before giving up on following"`
-	Interim                time.Duration `long:"interim" default:"1s" description:"interval time after successful request for consecutive mode"`
-	bufferSize             uint64
-	Timeout                time.Duration `short:"t" long:"timeout" default:"10s" description:"Timeout to wait for connection"`
-	tlsMaxVersion          uint16
-	tlsMinVersion          uint16
-	NoDiscard              bool `long:"no-discard" description:"raise error when the response body is larger then max-buffer-size"`
-	WaitFor                bool `long:"wait-for" description:"retry until successful when enabled"`
-	SSL                    bool `short:"S" long:"ssl" description:"use https"`
-	SNI                    bool `long:"sni" description:"enable SNI"`
-	TCP4                   bool `short:"4" description:"use tcp4 only"`
-	TCP6                   bool `short:"6" description:"use tcp6 only"`
-	Version                bool `short:"V" long:"version" description:"Show version"`
-	Verbose                bool `short:"v" long:"verbose" description:"Show verbose output"`
-	ShowBody               bool `long:"show-body" description:"Print body content bellow status line"`
-	IgnoreCertificateChain bool `long:"ignore-certificate-chain" description:"by default all certificates are checked for given thresholds. this option only checks the leaf certificate."`
+	Follow                   string `long:"follow" description:"Redirection method" choice:"ok" choice:"warning" choice:"critical" choice:"follow" choice:"sticky" choice:"stickyport"`
+	MaxBufferSize            string `long:"max-buffer-size" default:"1MB" description:"Max buffer size to read response body"`
+	expectByte               []byte
+	WaitForInterval          time.Duration `long:"wait-for-interval" default:"2s" description:"retry interval"`
+	WaitForMax               time.Duration `long:"wait-for-max" description:"time to wait for success"`
+	Consecutive              int           `long:"consecutive" default:"1" description:"number of consecutive successful requests required"`
+	Port                     int           `short:"p" long:"port" description:"Port number"`
+	certificateWarnDays      int
+	MaxRedirects             int           `long:"max-redirs" description:"Maximum redirects before giving up on following"`
+	Interim                  time.Duration `long:"interim" default:"1s" description:"interval time after successful request for consecutive mode"`
+	bufferSize               uint64
+	Timeout                  time.Duration `short:"t" long:"timeout" default:"10s" description:"Timeout to wait for connection"`
+	tlsMaxVersion            uint16
+	tlsMinVersion            uint16
+	NoDiscard                bool `long:"no-discard" description:"raise error when the response body is larger then max-buffer-size"`
+	WaitFor                  bool `long:"wait-for" description:"retry until successful when enabled"`
+	SSL                      bool `short:"S" long:"ssl" description:"use https"`
+	SNI                      bool `long:"sni" description:"enable SNI"`
+	TCP4                     bool `short:"4" description:"use tcp4 only"`
+	TCP6                     bool `short:"6" description:"use tcp6 only"`
+	Version                  bool `short:"V" long:"version" description:"Show version"`
+	Verbose                  bool `short:"v" long:"verbose" description:"Show verbose output"`
+	ShowBody                 bool `long:"show-body" description:"Print body content bellow status line"`
+	IgnoreCertificateChain   bool `long:"ignore-certificate-chain" description:"by default all certificates are checked in many aspects. Toggle this option to only check the leaf (final) certificate."`
+	DontIgnoreHostCN         bool `long:"dont-ignore-host-cn" description:"Certificate subject's Common Name should matches the hostname. Common Name field is now largely unused in modern web, with Subject Alternative Name fields taking their place when present. It is ignored by default, use this flag to enable it."`
+	IgnoreSAN                bool `long:"ignore-san" description:"Certificates have Subject Alternative Name fields, where the hostname/IP addresses of this certificate are listed. This is used over Subject Name is present."`
+	IgnoreNotAfter           bool `long:"ignore-not-after" description:"Certificates are invalid after the timestamp in their NotAfter has passed. This field can be ignored with this flag."`
+	IgnoreNotBefore          bool `long:"ignore-not-before" description:"Certificates are invalid before the timestamp in their NotBefore is reached. This field can be ignored with this flag."`
+	IgnoreSignatureAlgorithm bool `long:"ignore-signature-algorithm" description:"Some signature algorithms are deemed insecure, and are deprecated. The algorithm used can be ignored with this flag."`
 }
 
 func makeTLSConfig(opts *commandOpts) (conf *tls.Config) {

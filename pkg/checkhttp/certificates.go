@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // checkCertificate establishes a TLS connection to the server and validates the certificate
@@ -86,11 +87,6 @@ func checkCertificateChain(opts *commandOpts, certs []*x509.Certificate) *CheckR
 		matchHostname = host
 	}
 
-	leafCert := certs[0]
-
-	// Check that the certificate's CN or SAN matches the hostname (leaf only).
-	pushHostnameCheck(leafCert, matchHostname, opts, resultsPQ)
-
 	for idx, cert := range certs {
 		shouldCheck := idx == 0 || !opts.IgnoreCertificateChain
 
@@ -100,27 +96,56 @@ func checkCertificateChain(opts *commandOpts, certs []*x509.Certificate) *CheckR
 
 		if shouldCheck {
 			perfParts = append(perfParts, fmt.Sprintf("days_chain_elem%d=%dd;%d;%s;0", idx, daysLeft, opts.certificateWarnDays, critDaysPerfStr))
-			pushExpiryCheck(cert, opts, idx, customTimeLayout, resultsPQ)
+
+			// The flag is false by default, it has to be manually toggled
+			if opts.DontIgnoreHostCN {
+				pushCNCehck(cert, matchHostname, opts, resultsPQ)
+			}
+
+			if !opts.IgnoreSAN {
+				pushSANCheck(cert, matchHostname, idx, opts, resultsPQ)
+			}
+
+			if !opts.IgnoreNotBefore {
+				pushNotBeforeCheck(cert, opts, idx, customTimeLayout, resultsPQ)
+			}
+
+			if !opts.IgnoreNotAfter {
+				pushNotAfterCheck(cert, opts, idx, customTimeLayout, resultsPQ)
+			}
+
+			if !opts.IgnoreSignatureAlgorithm {
+				// Signature algorithm check.
+				pushSignatureCheck(cert, opts, idx, resultsPQ)
+			}
 		} else {
 			perfParts = append(perfParts, fmt.Sprintf("days_chain_elem%d=%dd;;;0", idx, daysLeft))
 		}
+	}
 
-		if shouldCheck {
-			// Signature algorithm check.
-			pushSignatureCheck(cert, opts, idx, resultsPQ)
+	subchecks := []*CheckResult{}
+	for resultsPQ.Len() > 0 {
+		top, ok := heap.Pop(resultsPQ).(*CheckResult)
+		if !ok {
+			break
+		}
+		subchecks = append(subchecks, top)
+	}
 
-			// NotBefore check (certificate not yet valid).
-			pushNotBeforeCheck(cert, opts, idx, customTimeLayout, resultsPQ)
+	if opts.Verbose {
+		for idx, subcheck := range subchecks {
+			fmt.Printf("subcheck %d\ncode: %d | msg: %s\n", idx, subcheck.code, subcheck.msg)
 		}
 	}
 
-	top, ok := heap.Pop(resultsPQ).(*CheckResult)
-	if !ok {
+	if len(subchecks) == 0 {
 		return &CheckResult{
 			"HTTP UNKNOWN - Internal error during certificate check: unexpected type in priority queue",
 			UNKNOWN,
 		}
 	}
+
+	top := subchecks[0]
 
 	perfData := strings.Join(perfParts, " ")
 	if perfData != "" {
@@ -135,14 +160,170 @@ func formatCertSubject(cert *x509.Certificate) string {
 	return fmt.Sprintf("(subject: %s, issuer: %s)", cert.Subject.CommonName, cert.Issuer.CommonName)
 }
 
-// pushHostnameCheck verifies that the leaf certificate's CN or SAN DNS names
+// Taken from:  /usr/local/go/src/crypto/x509/verify.go as it was not exported.
+// Useful for checking CommonName
+// validHostname reports whether host is a valid hostname that can be matched or
+// matched against according to RFC 6125 2.2, with some leniency to accommodate
+// legacy values.
+func validHostname(host string, isPattern bool) bool {
+	if !isPattern {
+		host = strings.TrimSuffix(host, ".")
+	}
+	if len(host) == 0 {
+		return false
+	}
+	if host == "*" {
+		// Bare wildcards are not allowed, they are not valid DNS names,
+		// nor are they allowed per RFC 6125.
+		return false
+	}
+
+	for i, part := range strings.Split(host, ".") {
+		if part == "" {
+			// Empty label.
+			return false
+		}
+		if isPattern && i == 0 && part == "*" {
+			// Only allow full left-most wildcards, as those are the only ones
+			// we match, and matching literal '*' characters is probably never
+			// the expected behavior.
+			continue
+		}
+		for j, c := range part {
+			if 'a' <= c && c <= 'z' {
+				continue
+			}
+			if '0' <= c && c <= '9' {
+				continue
+			}
+			if 'A' <= c && c <= 'Z' {
+				continue
+			}
+			if c == '-' && j != 0 {
+				continue
+			}
+			if c == '_' {
+				// Not a valid character in hostnames, but commonly
+				// found in deployments outside the WebPKI.
+				continue
+			}
+			return false
+		}
+	}
+
+	return true
+}
+
+// taken from: /usr/local/go/src/crypto/x509/verify.go as it was not exported
+// Useful for checking CommonName
+func matchHostnames(pattern, host string) bool {
+	pattern = toLowerCaseASCII(pattern)
+	host = toLowerCaseASCII(strings.TrimSuffix(host, "."))
+
+	if len(pattern) == 0 || len(host) == 0 {
+		return false
+	}
+
+	patternParts := strings.Split(pattern, ".")
+	hostParts := strings.Split(host, ".")
+
+	if len(patternParts) != len(hostParts) {
+		return false
+	}
+
+	for i, patternPart := range patternParts {
+		if i == 0 && patternPart == "*" {
+			continue
+		}
+		if patternPart != hostParts[i] {
+			return false
+		}
+	}
+
+	return true
+}
+
+// taken from: /usr/local/go/src/crypto/x509/verify.go as it was not exported
+// toLowerCaseASCII returns a lower-case version of in. See RFC 6125 6.4.1. We use
+// an explicitly ASCII function to avoid any sharp corners resulting from
+// performing Unicode operations on DNS labels.
+func toLowerCaseASCII(in string) string {
+	// If the string is already lower-case then there's nothing to do.
+	isAlreadyLowerCase := true
+	for _, c := range in {
+		if c == utf8.RuneError {
+			// If we get a UTF-8 error then there might be
+			// upper-case ASCII bytes in the invalid sequence.
+			isAlreadyLowerCase = false
+			break
+		}
+		if 'A' <= c && c <= 'Z' {
+			isAlreadyLowerCase = false
+			break
+		}
+	}
+
+	if isAlreadyLowerCase {
+		return in
+	}
+
+	out := []byte(in)
+	for i, c := range out {
+		if 'A' <= c && c <= 'Z' {
+			out[i] += 'a' - 'A'
+		}
+	}
+	return string(out)
+}
+
+func pushCNCehck(cert *x509.Certificate, hostname string, opts *commandOpts, resultsPQ *CheckResultPQ) {
+	cn_is_valid := validHostname(cert.Subject.CommonName, false) || validHostname(hostname, true)
+	if !cn_is_valid {
+		heap.Push(resultsPQ, &CheckResult{
+			fmt.Sprintf("HTTP CRITICAL - Certificate Common Name %q is not a valid DNS name/pattern for host %q on port %d",
+				cert.Subject.CommonName, hostname, opts.Port),
+			CRITICAL,
+		})
+	}
+
+	cn_same_as_hostname := matchHostnames(cert.Subject.CommonName, hostname)
+	if !cn_same_as_hostname {
+		heap.Push(resultsPQ, &CheckResult{
+			fmt.Sprintf("HTTP CRITICAL - Certificate Common Name %q does not match the host %q on port %d",
+				cert.Subject.CommonName, hostname, opts.Port),
+			CRITICAL,
+		})
+	}
+
+	heap.Push(resultsPQ, &CheckResult{
+		fmt.Sprintf("HTTP OK - Certificate CN match host name %q for host %q on port %d",
+			hostname, opts.Hostname, opts.Port),
+		OK,
+	})
+}
+
+// pushSANCheck verifies that the leaf certificate's IP or DNS SAN names
 // match the expected hostname (or SNI name). It pushes the result to the PQ.
-func pushHostnameCheck(cert *x509.Certificate, hostname string, opts *commandOpts, resultsPQ *CheckResultPQ) {
+func pushSANCheck(cert *x509.Certificate, hostname string, index int, opts *commandOpts, resultsPQ *CheckResultPQ) {
+	// if the certificate is an CA or Root cert, no need to check its SANs
+
+	if cert.IsCA {
+		heap.Push(resultsPQ, &CheckResult{
+			fmt.Sprintf("HTTP OK - Certificate %q at chain position %d is a CA cert, no need to check its IP/DNS SAN for host name %q on port %d - (IP SANs: %v, DNS SANs: %v)",
+				formatCertSubject(cert), index, hostname, opts.Port, cert.IPAddresses, cert.DNSNames),
+			OK,
+		})
+		return
+	}
+
+	// verifyHostname ignores legacy CommonName field
+	// it checks using x509.Certificate.IPAdresses (IP SANs)
+	// or  x509.Certificate.DnsNames (Hostname SANs)
 	err := cert.VerifyHostname(hostname)
 	if err != nil {
 		heap.Push(resultsPQ, &CheckResult{
-			fmt.Sprintf("HTTP CRITICAL - Certificate CN and SAN do not match host name %q for host %q on port %d - (subject: %s)",
-				hostname, opts.Hostname, opts.Port, cert.Subject.CommonName),
+			fmt.Sprintf("HTTP CRITICAL - Certificate %q at chain position %d has IP/DNS SANs that do not match host name %q for host %q on port %d - (IP SANs: %v, DNS SANs: %v)",
+				formatCertSubject(cert), index, hostname, opts.Hostname, opts.Port, cert.IPAddresses, cert.DNSNames),
 			CRITICAL,
 		})
 
@@ -150,14 +331,14 @@ func pushHostnameCheck(cert *x509.Certificate, hostname string, opts *commandOpt
 	}
 
 	heap.Push(resultsPQ, &CheckResult{
-		fmt.Sprintf("HTTP OK - Certificate CN or SAN match host name %q for host %q on port %d - (subject: %s)",
-			hostname, opts.Hostname, opts.Port, cert.Subject.CommonName),
+		fmt.Sprintf("HTTP OK - Certificate %q at chain position %d has IP/DNS SANs match host name %q for host %q on port %d - (IP SANs: %v, DNS SANs: %v)",
+			formatCertSubject(cert), index, hostname, opts.Hostname, opts.Port, cert.IPAddresses, cert.DNSNames),
 		OK,
 	})
 }
 
-// pushExpiryCheck checks the certificate's NotAfter expiry against warning/critical thresholds.
-func pushExpiryCheck(cert *x509.Certificate, opts *commandOpts, idx int, timeLayout string, resultsPQ *CheckResultPQ) {
+// pushNotAfterCheck checks the certificate's NotAfter expiry against warning/critical thresholds.
+func pushNotAfterCheck(cert *x509.Certificate, opts *commandOpts, idx int, timeLayout string, resultsPQ *CheckResultPQ) {
 	expiry := cert.NotAfter
 	daysLeft := int(time.Until(expiry).Hours() / hoursInDays)
 
@@ -214,7 +395,7 @@ func pushNotBeforeCheck(cert *x509.Certificate, opts *commandOpts, idx int, time
 	notBefore := cert.NotBefore
 	if time.Now().Before(notBefore) {
 		heap.Push(resultsPQ, &CheckResult{
-			fmt.Sprintf("HTTP CRITICAL - Certificate %q for host %q:%d at chain position %d is not yet valid (valid from %s)",
+			fmt.Sprintf("HTTP CRITICAL - Certificate %q for host %q:%d at chain position %d is before its validity start time (valid from %s)",
 				formatCertSubject(cert), opts.Hostname, opts.Port, idx, notBefore.Format(timeLayout)),
 			CRITICAL,
 		})
@@ -223,7 +404,7 @@ func pushNotBeforeCheck(cert *x509.Certificate, opts *commandOpts, idx int, time
 	}
 
 	heap.Push(resultsPQ, &CheckResult{
-		fmt.Sprintf("HTTP OK - Certificate %q for host %q:%d at chain position %d is within its validity period",
+		fmt.Sprintf("HTTP OK - Certificate %q for host %q:%d at chain position %d is beyond its validity start time",
 			formatCertSubject(cert), opts.Hostname, opts.Port, idx),
 		OK,
 	})
