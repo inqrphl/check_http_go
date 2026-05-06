@@ -13,6 +13,16 @@ import (
 	"unicode/utf8"
 )
 
+// Issues that are more important to display have lower importance numbers
+const (
+	resultImportancePerLevel         = 100
+	notAfterImportanceLevel          = 51
+	notBeforeImportanceLevel         = 52
+	signatureImportanceLevel         = 53
+	subjectAlternativeNameImportance = 54
+	commonNameImportance             = 55
+)
+
 // checkCertificate establishes a TLS connection to the server and validates the certificate
 // against the warning and critical thresholds. It returns immediately without checking the HTTP content.
 func checkCertificate(ctx context.Context, opts *commandOpts, dialFunc func(ctx context.Context, _ string, _ string) (net.Conn, error), tlsConfig *tls.Config) *CheckResult {
@@ -31,6 +41,7 @@ func checkCertificate(ctx context.Context, opts *commandOpts, dialFunc func(ctx 
 		return &CheckResult{
 			fmt.Sprintf("HTTP CRITICAL - Error connecting to host %s on port %d: %v", opts.IPAddress, opts.Port, err),
 			CRITICAL,
+			nil,
 		}
 	}
 	defer conn.Close()
@@ -42,6 +53,7 @@ func checkCertificate(ctx context.Context, opts *commandOpts, dialFunc func(ctx 
 		return &CheckResult{
 			fmt.Sprintf("HTTP CRITICAL - TLS handshake failed for host %s on port %d: %v", opts.IPAddress, opts.Port, handshakeErr),
 			CRITICAL,
+			nil,
 		}
 	}
 
@@ -50,6 +62,7 @@ func checkCertificate(ctx context.Context, opts *commandOpts, dialFunc func(ctx 
 		return &CheckResult{
 			fmt.Sprintf("HTTP CRITICAL - No certificate returned from host %s on port %d", opts.IPAddress, opts.Port),
 			CRITICAL,
+			nil,
 		}
 	}
 
@@ -101,24 +114,24 @@ func checkCertificateChain(opts *commandOpts, certs []*x509.Certificate) *CheckR
 
 			// The flag is false by default, it has to be manually toggled
 			if opts.DontIgnoreHostCN {
-				pushCNCehck(cert, matchHostname, opts, resultsPQ)
+				pushCommonNameCheck(cert, matchHostname, perfIndex, opts, resultsPQ)
 			}
 
 			if !opts.IgnoreSAN {
-				pushSANCheck(cert, matchHostname, idx, opts, resultsPQ)
+				pushSubjectAlternativeNameCheck(cert, matchHostname, perfIndex, opts, resultsPQ)
 			}
 
 			if !opts.IgnoreNotBefore {
-				pushNotBeforeCheck(cert, opts, idx, customTimeLayout, resultsPQ)
+				pushNotBeforeCheck(cert, opts, perfIndex, customTimeLayout, resultsPQ)
 			}
 
 			if !opts.IgnoreNotAfter {
-				pushNotAfterCheck(cert, opts, idx, customTimeLayout, resultsPQ)
+				pushNotAfterCheck(cert, opts, perfIndex, customTimeLayout, resultsPQ)
 			}
 
 			if !opts.IgnoreSignatureAlgorithm {
 				// Signature algorithm check.
-				pushSignatureCheck(cert, opts, idx, resultsPQ)
+				pushSignatureCheck(cert, opts, perfIndex, resultsPQ)
 			}
 		} else {
 			perfParts = append(perfParts, fmt.Sprintf("days_chain_elem%d=%dd;;;0", perfIndex, daysLeft))
@@ -136,7 +149,11 @@ func checkCertificateChain(opts *commandOpts, certs []*x509.Certificate) *CheckR
 
 	if opts.Verbose {
 		for idx, subcheck := range subchecks {
-			fmt.Printf("subcheck %d\ncode: %d | msg: %s\n", idx, subcheck.code, subcheck.msg)
+			importanceStr := "undefined"
+			if subcheck.resultImportance != nil {
+				importanceStr = strconv.FormatInt(int64(*subcheck.resultImportance), 10)
+			}
+			fmt.Printf("subcheck %d\ncode: %d | importance: %s | msg: %s\n", idx, subcheck.code, importanceStr, subcheck.msg)
 		}
 	}
 
@@ -144,6 +161,7 @@ func checkCertificateChain(opts *commandOpts, certs []*x509.Certificate) *CheckR
 		return &CheckResult{
 			"HTTP UNKNOWN - Internal error during certificate check: unexpected type in priority queue",
 			UNKNOWN,
+			nil,
 		}
 	}
 
@@ -159,7 +177,7 @@ func checkCertificateChain(opts *commandOpts, certs []*x509.Certificate) *CheckR
 
 // formatCertSubject returns a formatted string with the certificate subject details.
 func formatCertSubject(cert *x509.Certificate) string {
-	return fmt.Sprintf("(subject: %s, issuer: %s)", cert.Subject.CommonName, cert.Issuer.CommonName)
+	return fmt.Sprintf("'%s' from '%s'", cert.Subject.CommonName, cert.Issuer.CommonName)
 }
 
 // Taken from:  /usr/local/go/src/crypto/x509/verify.go as it was not exported.
@@ -278,42 +296,59 @@ func toLowerCaseASCII(in string) string {
 	return string(out)
 }
 
-func pushCNCehck(cert *x509.Certificate, hostname string, opts *commandOpts, resultsPQ *CheckResultPQ) {
+func pushCommonNameCheck(cert *x509.Certificate, hostname string, index int, opts *commandOpts, resultsPQ *CheckResultPQ) {
+	resultImportance := index*resultImportancePerLevel + commonNameImportance
+
+	if cert.IsCA {
+		heap.Push(resultsPQ, &CheckResult{
+			fmt.Sprintf("HTTP OK - x509 certificate %s at chain position %d is a CA cert, no need to check its CA for host name %q on port %d",
+				formatCertSubject(cert), index, hostname, opts.Port),
+			OK,
+			&resultImportance,
+		})
+		return
+	}
+
 	cn_is_valid := validHostname(cert.Subject.CommonName, false) || validHostname(hostname, true)
 	if !cn_is_valid {
 		heap.Push(resultsPQ, &CheckResult{
-			fmt.Sprintf("HTTP CRITICAL - Certificate Common Name %q is not a valid DNS name/pattern for host %q on port %d",
-				cert.Subject.CommonName, hostname, opts.Port),
+			fmt.Sprintf("HTTP CRITICAL - x509 certificate %s at chain position %d has common name %q , is not a valid pattern for a common name",
+				formatCertSubject(cert), index, cert.Subject.CommonName),
 			CRITICAL,
+			&resultImportance,
 		})
 	}
 
 	cn_same_as_hostname := matchHostnames(cert.Subject.CommonName, hostname)
 	if !cn_same_as_hostname {
 		heap.Push(resultsPQ, &CheckResult{
-			fmt.Sprintf("HTTP CRITICAL - Certificate Common Name %q does not match the host %q on port %d",
-				cert.Subject.CommonName, hostname, opts.Port),
+			fmt.Sprintf("HTTP CRITICAL - x509 certificate %s at chain position %d has common name %q , does not match the hostname %q on port %d",
+				formatCertSubject(cert), index, cert.Subject.CommonName, hostname, opts.Port),
 			CRITICAL,
+			&resultImportance,
 		})
 	}
 
 	heap.Push(resultsPQ, &CheckResult{
-		fmt.Sprintf("HTTP OK - Certificate CN match host name %q for host %q on port %d",
-			hostname, opts.Hostname, opts.Port),
+		fmt.Sprintf("HTTP OK - x509 certificate %s at chain position %d has common name %q , matches hostname %q on port %d",
+			formatCertSubject(cert), index, cert.Subject.CommonName, hostname, opts.Port),
 		OK,
+		&resultImportance,
 	})
 }
 
-// pushSANCheck verifies that the leaf certificate's IP or DNS SAN names
+// pushSubjectAlternativeNameCheck verifies that the leaf certificate's IP or DNS SAN names
 // match the expected hostname (or SNI name). It pushes the result to the PQ.
-func pushSANCheck(cert *x509.Certificate, hostname string, index int, opts *commandOpts, resultsPQ *CheckResultPQ) {
-	// if the certificate is an CA or Root cert, no need to check its SANs
+func pushSubjectAlternativeNameCheck(cert *x509.Certificate, hostname string, index int, opts *commandOpts, resultsPQ *CheckResultPQ) {
+	resultImportance := index*resultImportancePerLevel + subjectAlternativeNameImportance
 
+	// if the certificate is an CA or Root cert, no need to check its SANs
 	if cert.IsCA {
 		heap.Push(resultsPQ, &CheckResult{
-			fmt.Sprintf("HTTP OK - Certificate %q at chain position %d is a CA cert, no need to check its IP/DNS SAN for host name %q on port %d - (IP SANs: %v, DNS SANs: %v)",
+			fmt.Sprintf("HTTP OK - x509 certificate %s at chain position %d is a CA cert, no need to check its IP/DNS SAN for hostname %q on port %d - (IP SANs: %v, DNS SANs: %v)",
 				formatCertSubject(cert), index, hostname, opts.Port, cert.IPAddresses, cert.DNSNames),
 			OK,
+			&resultImportance,
 		})
 		return
 	}
@@ -324,90 +359,106 @@ func pushSANCheck(cert *x509.Certificate, hostname string, index int, opts *comm
 	err := cert.VerifyHostname(hostname)
 	if err != nil {
 		heap.Push(resultsPQ, &CheckResult{
-			fmt.Sprintf("HTTP CRITICAL - Certificate %q at chain position %d has IP/DNS SANs that do not match host name %q for host %q on port %d - (IP SANs: %v, DNS SANs: %v)",
-				formatCertSubject(cert), index, hostname, opts.Hostname, opts.Port, cert.IPAddresses, cert.DNSNames),
+			fmt.Sprintf("HTTP CRITICAL - x509 certificate %s at chain position %d has IP/DNS SANs that do not match hostname %q on port %d - (IP SANs: %v, DNS SANs: %v)",
+				formatCertSubject(cert), index, hostname, opts.Port, cert.IPAddresses, cert.DNSNames),
 			CRITICAL,
+			&resultImportance,
 		})
 
 		return
 	}
 
 	heap.Push(resultsPQ, &CheckResult{
-		fmt.Sprintf("HTTP OK - Certificate %q at chain position %d has IP/DNS SANs match host name %q for host %q on port %d - (IP SANs: %v, DNS SANs: %v)",
-			formatCertSubject(cert), index, hostname, opts.Hostname, opts.Port, cert.IPAddresses, cert.DNSNames),
+		fmt.Sprintf("HTTP OK - x509 certificate %s at chain position %d has IP/DNS SANs match hostname %q on port %d - (IP SANs: %v, DNS SANs: %v)",
+			formatCertSubject(cert), index, hostname, opts.Port, cert.IPAddresses, cert.DNSNames),
 		OK,
+		&resultImportance,
 	})
 }
 
 // pushNotAfterCheck checks the certificate's NotAfter expiry against warning/critical thresholds.
-func pushNotAfterCheck(cert *x509.Certificate, opts *commandOpts, idx int, timeLayout string, resultsPQ *CheckResultPQ) {
+func pushNotAfterCheck(cert *x509.Certificate, opts *commandOpts, index int, timeLayout string, resultsPQ *CheckResultPQ) {
+	resultImportance := index*resultImportancePerLevel + notAfterImportanceLevel
+
 	expiry := cert.NotAfter
 	daysLeft := int(time.Until(expiry).Hours() / hoursInDays)
 
 	switch {
 	case opts.certificateCritDays != nil && daysLeft <= *opts.certificateCritDays:
 		heap.Push(resultsPQ, &CheckResult{
-			fmt.Sprintf("HTTP CRITICAL - Certificate %q for host %q:%d at chain position %d will expire on %s - (expires in %d days)",
-				formatCertSubject(cert), opts.Hostname, opts.Port, idx, expiry.Format(timeLayout), daysLeft),
+			fmt.Sprintf("HTTP CRITICAL - x509 certificate %s at chain position %d for host %q on port %d will expire on %s - (expires in %d days)",
+				formatCertSubject(cert), index, opts.Hostname, opts.Port, expiry.Format(timeLayout), daysLeft),
 			CRITICAL,
+			&resultImportance,
 		})
 	case daysLeft <= opts.certificateWarnDays:
 		heap.Push(resultsPQ, &CheckResult{
-			fmt.Sprintf("HTTP WARNING - Certificate %q for host %q:%d at chain position %d will expire on %s - (expires in %d days)",
-				formatCertSubject(cert), opts.Hostname, opts.Port, idx, expiry.Format(timeLayout), daysLeft),
+			fmt.Sprintf("HTTP WARNING - x509 certificate %s at chain position %d for host %q on port %d will expire on %s - (expires in %d days)",
+				formatCertSubject(cert), opts.Hostname, opts.Port, index, expiry.Format(timeLayout), daysLeft),
 			WARNING,
+			&resultImportance,
 		})
 	default:
 		heap.Push(resultsPQ, &CheckResult{
-			fmt.Sprintf("HTTP OK - Certificate %q for host %q:%d at chain position %d will expire on %s - (expires in %d days)",
-				formatCertSubject(cert), opts.Hostname, opts.Port, idx, expiry.Format(timeLayout), daysLeft),
+			fmt.Sprintf("HTTP OK - x509 certificate %s at chain position %d for host %q on port %d will expire on %s - (expires in %d days)",
+				formatCertSubject(cert), index, opts.Hostname, opts.Port, expiry.Format(timeLayout), daysLeft),
 			OK,
+			&resultImportance,
 		})
 	}
 }
 
 // pushSignatureCheck validates that the certificate is not signed using a weak algorithm.
-func pushSignatureCheck(cert *x509.Certificate, opts *commandOpts, idx int, resultsPQ *CheckResultPQ) {
+func pushSignatureCheck(cert *x509.Certificate, opts *commandOpts, index int, resultsPQ *CheckResultPQ) {
+	resultImportance := index*resultImportancePerLevel + signatureImportanceLevel
+
 	sigAlgo := cert.SignatureAlgorithm.String()
 
 	switch cert.SignatureAlgorithm {
 	case x509.MD2WithRSA, x509.MD5WithRSA:
 		heap.Push(resultsPQ, &CheckResult{
-			fmt.Sprintf("HTTP CRITICAL - Certificate %q for host %q:%d at chain position %d uses weak signature algorithm %s",
-				formatCertSubject(cert), opts.Hostname, opts.Port, idx, sigAlgo),
+			fmt.Sprintf("HTTP CRITICAL - x509 certificate %s at chain position %d for host %q on port %d uses weak signature algorithm %s",
+				formatCertSubject(cert), index, opts.Hostname, opts.Port, sigAlgo),
 			CRITICAL,
+			&resultImportance,
 		})
 	case x509.SHA1WithRSA:
 		heap.Push(resultsPQ, &CheckResult{
-			fmt.Sprintf("HTTP WARNING - Certificate %q for host %q:%d at chain position %d uses deprecated SHA1 signature algorithm %s",
-				formatCertSubject(cert), opts.Hostname, opts.Port, idx, sigAlgo),
+			fmt.Sprintf("HTTP WARNING - x509 certificate %s at chain position %d for host %q on port %d uses deprecated SHA1 signature algorithm %s",
+				formatCertSubject(cert), index, opts.Hostname, opts.Port, sigAlgo),
 			WARNING,
+			&resultImportance,
 		})
 	default:
 		heap.Push(resultsPQ, &CheckResult{
-			fmt.Sprintf("HTTP OK - Certificate %q for host %q:%d at chain position %d uses signature algorithm %s",
-				formatCertSubject(cert), opts.Hostname, opts.Port, idx, sigAlgo),
+			fmt.Sprintf("HTTP OK - x509 certificate %s at chain position %d for host %q on port %d uses strong signature algorithm %s",
+				formatCertSubject(cert), index, opts.Hostname, opts.Port, sigAlgo),
 			OK,
+			&resultImportance,
 		})
 	}
 }
 
 // pushNotBeforeCheck verifies the certificate is not used before its validity period begins.
-func pushNotBeforeCheck(cert *x509.Certificate, opts *commandOpts, idx int, timeLayout string, resultsPQ *CheckResultPQ) {
+func pushNotBeforeCheck(cert *x509.Certificate, opts *commandOpts, index int, timeLayout string, resultsPQ *CheckResultPQ) {
+	resultImportance := index*resultImportancePerLevel + notBeforeImportanceLevel
+
 	notBefore := cert.NotBefore
 	if time.Now().Before(notBefore) {
 		heap.Push(resultsPQ, &CheckResult{
-			fmt.Sprintf("HTTP CRITICAL - Certificate %q for host %q:%d at chain position %d is before its validity start time (valid from %s)",
-				formatCertSubject(cert), opts.Hostname, opts.Port, idx, notBefore.Format(timeLayout)),
+			fmt.Sprintf("HTTP CRITICAL - x509 certificate %s at chain position %d for host %q on port %d has its validity start time in future (valid from %s)",
+				formatCertSubject(cert), index, opts.Hostname, opts.Port, notBefore.Format(timeLayout)),
 			CRITICAL,
+			&resultImportance,
 		})
 
 		return
 	}
 
 	heap.Push(resultsPQ, &CheckResult{
-		fmt.Sprintf("HTTP OK - Certificate %q for host %q:%d at chain position %d is beyond its validity start time",
-			formatCertSubject(cert), opts.Hostname, opts.Port, idx),
+		fmt.Sprintf("HTTP OK - x509 certificate %s at chain position %d for host %q on port %d has its validity start time in past (valid from %s)",
+			formatCertSubject(cert), index, opts.Hostname, opts.Port, notBefore.Format(timeLayout)),
 		OK,
+		&resultImportance,
 	})
 }

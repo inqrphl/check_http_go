@@ -39,6 +39,8 @@ func (w *capWriter) Bytes() []byte {
 type CheckResult struct {
 	msg  string
 	code int
+	// used for comparing subchecks to present most important one first
+	resultImportance *int
 }
 
 func (e *CheckResult) Error() string {
@@ -50,13 +52,21 @@ func (e *CheckResult) Code() int {
 }
 
 // CheckResultPQ implements a max-heap (by exit code) of CheckResult pointers.
-// The highest severity (CRITICAL > WARNING > OK) is always at the top.
 type CheckResultPQ []*CheckResult
 
 func (pq *CheckResultPQ) Len() int { return len(*pq) }
 
+// In a heap, the most - less element is on top
+// The highest severity (CRITICAL > WARNING > OK) is more important so it wins the "less" comparison
+// If severities are equal, check resultImportance, who has lower is more important and wins the "less" comparison
 func (pq *CheckResultPQ) Less(i, j int) bool {
-	return (*pq)[i].Code() > (*pq)[j].Code()
+	if (*pq)[i].Code() != (*pq)[j].Code() {
+		return (*pq)[i].Code() > (*pq)[j].Code()
+	}
+	if (*pq)[i].resultImportance != nil && (*pq)[j].resultImportance != nil {
+		return *((*pq)[i].resultImportance) < *((*pq)[j].resultImportance)
+	}
+	return true
 }
 
 func (pq *CheckResultPQ) Swap(i, j int) {

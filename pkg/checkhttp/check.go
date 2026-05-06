@@ -310,6 +310,7 @@ func searchForPatterns(bodyBytes *capWriter, bodyString, proto, status string, o
 			return []string{}, &CheckResult{
 				fmt.Sprintf("HTTP CRITICAL - Invalid HTTP response received from host on port %d: %s", opts.Port, statusLine),
 				CRITICAL,
+				nil,
 			}
 		}
 
@@ -323,6 +324,7 @@ func searchForPatterns(bodyBytes *capWriter, bodyString, proto, status string, o
 			return matches, &CheckResult{
 				fmt.Sprintf(`HTTP CRITICAL - HTTP response body Not matched %q from host on port %d`, string(opts.expectByte), opts.Port),
 				CRITICAL,
+				nil,
 			}
 		}
 
@@ -335,6 +337,7 @@ func searchForPatterns(bodyBytes *capWriter, bodyString, proto, status string, o
 			return matches, &CheckResult{
 				fmt.Sprintf(`Could not build case sensitive regex from option: '%s'`, opts.RegexStr),
 				UNKNOWN,
+				nil,
 			}
 		}
 
@@ -343,6 +346,7 @@ func searchForPatterns(bodyBytes *capWriter, bodyString, proto, status string, o
 			return matches, &CheckResult{
 				fmt.Sprintf(`HTTP CRITICAL - HTTP response body did not match regex: '%s' from host: %s on port: %d`, opts.RegexStr, opts.Hostname, opts.Port),
 				CRITICAL,
+				nil,
 			}
 		}
 
@@ -356,6 +360,7 @@ func searchForPatterns(bodyBytes *capWriter, bodyString, proto, status string, o
 			return matches, &CheckResult{
 				fmt.Sprintf(`Could not build case insensitive regex from option: '%s'`, opts.EregexStr),
 				UNKNOWN,
+				nil,
 			}
 		}
 
@@ -364,6 +369,7 @@ func searchForPatterns(bodyBytes *capWriter, bodyString, proto, status string, o
 			return matches, &CheckResult{
 				fmt.Sprintf(`HTTP CRITICAL - HTTP response body did not match eregex: '%s' from host: %s on port: %d`, opts.EregexStr, opts.Hostname, opts.Port),
 				CRITICAL,
+				nil,
 			}
 		}
 
@@ -418,18 +424,21 @@ func clientRedirectErrorHandler(err clientRedirectError, meta *RequestMetadata, 
 			fmt.Sprintf("HTTP OK: %d - %d bytes in %.3f second response time | time=%.3f size=%dB",
 				meta.res.StatusCode, meta.res.ContentLength, meta.duration.Seconds(), meta.duration.Seconds(), meta.res.ContentLength),
 			OK,
+			nil,
 		}, nil
 	case "warning":
 		return &CheckResult{
 			fmt.Sprintf("HTTP WARNING: %d - %d bytes in %.3f second response time | time=%.3f size=%dB",
 				meta.res.StatusCode, meta.res.ContentLength, meta.duration.Seconds(), meta.duration.Seconds(), meta.res.ContentLength),
 			WARNING,
+			nil,
 		}, nil
 	case "critical":
 		return &CheckResult{
 			fmt.Sprintf("HTTP CRITICAL: %d - %d bytes in %.3f second response time | time=%.3f size=%dB",
 				meta.res.StatusCode, meta.res.ContentLength, meta.duration.Seconds(), meta.duration.Seconds(), meta.res.ContentLength),
 			CRITICAL,
+			nil,
 		}, nil
 	case "sticky", "stickyport":
 		nextReq = err.redirectedReq
@@ -467,6 +476,7 @@ func clientRedirectErrorHandler(err clientRedirectError, meta *RequestMetadata, 
 		return &CheckResult{
 			"HTTP UNKNOWN: Unknown follow strategy: " + err.followOption,
 			0,
+			nil,
 		}, nil
 	}
 }
@@ -511,6 +521,7 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 		return "", &CheckResult{
 			fmt.Sprintf("Error in building request: %v", err),
 			UNKNOWN,
+			nil,
 		}
 	}
 
@@ -525,6 +536,7 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 			return "", &CheckResult{
 				"HTTP UNKNOWN - Max redirections reached",
 				UNKNOWN,
+				nil,
 			}
 		}
 
@@ -533,6 +545,7 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 			return "", &CheckResult{
 				fmt.Sprintf("HTTP UNKNOWN - Error when performing request: %s", err),
 				UNKNOWN,
+				nil,
 			}
 		}
 
@@ -555,6 +568,7 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 		return "", &CheckResult{
 			"HTTP UNKNOWN - Error when performing request",
 			UNKNOWN,
+			nil,
 		}
 	}
 
@@ -575,6 +589,7 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 		return "", &CheckResult{
 			fmt.Sprintf("HTTP UNKNOWN - Error when performing request: %s", err),
 			UNKNOWN,
+			nil,
 		}
 	}
 
@@ -583,6 +598,7 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 		return "", &CheckResult{
 			fmt.Sprintf("HTTP UNKNOWN - Error when performing request: %s", err),
 			UNKNOWN,
+			nil,
 		}
 	}
 
@@ -600,6 +616,7 @@ func handleErroneusReturnCodes(res *http.Response, opts *commandOpts, proto, sta
 		return &CheckResult{
 			fmt.Sprintf("HTTP WARNING - Invalid HTTP response received from host on port %d: %s", opts.Port, statusLine),
 			WARNING,
+			nil,
 		}
 	}
 
@@ -608,6 +625,7 @@ func handleErroneusReturnCodes(res *http.Response, opts *commandOpts, proto, sta
 		return &CheckResult{
 			fmt.Sprintf("HTTP CRITICAL - Invalid HTTP response received from host on port %d: %s", opts.Port, statusLine),
 			CRITICAL,
+			nil,
 		}
 	}
 
@@ -807,7 +825,7 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 			}
 
 			if critDays > warnDays {
-				fmt.Fprintf(output, "Certificate check critical days is higher than warning days. That is illogical, higher tier alert critical may be raised before lower tier altert warning.\n")
+				fmt.Fprintf(output, "Certificate expiration date check: warning days is lower than critical days.\n")
 
 				return UNKNOWN
 			}
