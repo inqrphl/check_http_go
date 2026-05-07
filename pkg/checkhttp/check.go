@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/dustin/go-humanize"
 	"github.com/sni/go-flags"
@@ -68,13 +70,14 @@ type commandOpts struct {
 	expectByte             []byte
 	WaitForInterval        time.Duration `long:"wait-for-interval" default:"2s" description:"retry interval"`
 	WaitForMax             time.Duration `long:"wait-for-max" description:"time to wait for success"`
+	TimeoutParsed          time.Duration // parsed version of the timeout
 	Consecutive            int           `long:"consecutive" default:"1" description:"number of consecutive successful requests required"`
 	Port                   int           `short:"p" long:"port" description:"Port number"`
 	certificateWarnDays    int
 	MaxRedirects           int           `long:"max-redirs" description:"Maximum redirects before giving up on following"`
 	Interim                time.Duration `long:"interim" default:"1s" description:"interval time after successful request for consecutive mode"`
 	bufferSize             uint64
-	Timeout                time.Duration `short:"t" long:"timeout" default:"10s" description:"Timeout to wait for connection"`
+	TimeoutStr             string `short:"t" long:"timeout" default:"10" description:"Timeout to wait for connection. If no time unit is given at the end, default of seconds is assumed"`
 	tlsMaxVersion          uint16
 	tlsMinVersion          uint16
 	NoDiscard              bool `long:"no-discard" description:"raise error when the response body is larger then max-buffer-size"`
@@ -125,7 +128,7 @@ func makeTLSConfig(opts *commandOpts) (conf *tls.Config) {
 // net.Dialer is for creating a TCP connection.
 func makeDialer(opts *commandOpts) func(ctx context.Context, _ string, _ string) (net.Conn, error) {
 	baseDialFunc := (&net.Dialer{
-		Timeout:   opts.Timeout,
+		Timeout:   opts.TimeoutParsed,
 		KeepAlive: defaultKeepAliveSeconds * time.Second,
 		DualStack: true,
 	}).DialContext
@@ -166,10 +169,10 @@ func makeTransport(opts *commandOpts, dialFunc func(ctx context.Context, _ strin
 		Proxy:                 proxy,
 		DialContext:           dialFunc,
 		IdleConnTimeout:       defaultIdleConnTimeoutSeconds * time.Second,
-		TLSHandshakeTimeout:   opts.Timeout,
+		TLSHandshakeTimeout:   opts.TimeoutParsed,
 		ExpectContinueTimeout: defaultExpectContinueTimeoutSeconds * time.Second,
 		// self-customized values
-		ResponseHeaderTimeout: opts.Timeout,
+		ResponseHeaderTimeout: opts.TimeoutParsed,
 		TLSClientConfig:       tlsConfig,
 		ForceAttemptHTTP2:     true,
 	}, nil
@@ -744,6 +747,19 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 		opts.MaxRedirects = 15
 	}
 
+	timeoutStrLastRune, _ := utf8.DecodeLastRuneInString(opts.TimeoutStr)
+	if unicode.IsDigit(timeoutStrLastRune) {
+		opts.TimeoutStr += "s"
+	}
+
+	var timeoutParseErr error
+	opts.TimeoutParsed, timeoutParseErr = time.ParseDuration(opts.TimeoutStr)
+	if timeoutParseErr != nil {
+		fmt.Fprintf(output, "Error parsing timeoutStr: %s , %s", opts.TimeoutStr, timeoutParseErr.Error())
+
+		return UNKNOWN
+	}
+
 	switch opts.TLSMinVersion {
 	// argument parser only accepts these values as valid
 	case "1.0":
@@ -847,7 +863,7 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 			return UNKNOWN
 		}
 
-		timeout := opts.Timeout
+		timeout := opts.TimeoutParsed
 
 		certCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
@@ -870,10 +886,10 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return clientRedirectHandler(req, via, &opts)
 		},
-		Timeout: opts.Timeout,
+		Timeout: opts.TimeoutParsed,
 	}
 
-	timeout := opts.Timeout
+	timeout := opts.TimeoutParsed
 	if opts.WaitForMax > 0 {
 		timeout = opts.WaitForMax
 	}
