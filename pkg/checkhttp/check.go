@@ -65,31 +65,35 @@ type commandOpts struct {
 	RegexStr      string `long:"regex" description:"Search page for case-sensitive regex string"`
 	EregexStr     string `long:"eregex" description:"Search page for case-insensitive regex string"`
 	//nolint:staticcheck,lll // SA5008: multiple "choice" tags are required by our CLI parser. The line is long due to a lot of possible choices.
-	Onredirect             string `long:"onredirect" description:"What strategy to use when encountering a redirect. ok/warning/critical returns immediately. follow uses the new URL returned by golang HTTP client. Sticky keeps the IP to be same after redirect, and stickyport persists the port as well." choice:"ok" choice:"warning" choice:"critical" choice:"follow" choice:"sticky" choice:"stickyport"`
-	MaxBufferSize          string `long:"max-buffer-size" default:"1MB" description:"Max buffer size to read response body"`
-	expectByte             []byte
-	WaitForInterval        time.Duration `long:"wait-for-interval" default:"2s" description:"retry interval"`
-	WaitForMax             time.Duration `long:"wait-for-max" description:"time to wait for success"`
-	TimeoutParsed          time.Duration // parsed version of the timeout
-	Consecutive            int           `long:"consecutive" default:"1" description:"number of consecutive successful requests required"`
-	Port                   int           `short:"p" long:"port" description:"Port number"`
-	certificateWarnDays    int
-	MaxRedirects           int           `long:"max-redirs" description:"Maximum redirects before giving up on following"`
-	Interim                time.Duration `long:"interim" default:"1s" description:"interval time after successful request for consecutive mode"`
-	bufferSize             uint64
-	TimeoutStr             string `short:"t" long:"timeout" default:"10" description:"Timeout to wait for connection. If no time unit is given at the end, default of seconds is assumed"`
-	tlsMaxVersion          uint16
-	tlsMinVersion          uint16
-	NoDiscard              bool `long:"no-discard" description:"raise error when the response body is larger then max-buffer-size"`
-	WaitFor                bool `long:"wait-for" description:"retry until successful when enabled"`
-	SSL                    bool `short:"S" long:"ssl" description:"use https"`
-	SNI                    bool `long:"sni" description:"enable SNI"`
-	TCP4                   bool `short:"4" description:"use tcp4 only"`
-	TCP6                   bool `short:"6" description:"use tcp6 only"`
-	Version                bool `short:"V" long:"version" description:"Show version"`
-	Verbose                bool `short:"v" long:"verbose" description:"Show verbose output"`
-	ShowBody               bool `long:"show-body" description:"Print body content bellow status line"`
-	IgnoreCertificateChain bool `long:"ignore-certificate-chain" description:"by default all certificates are checked in many aspects. Toggle this option to only check the leaf (final) certificate."`
+	Onredirect              string `long:"onredirect" description:"What strategy to use when encountering a redirect. ok/warning/critical returns immediately. follow uses the new URL returned by golang HTTP client. Sticky keeps the IP to be same after redirect, and stickyport persists the port as well." choice:"ok" choice:"warning" choice:"critical" choice:"follow" choice:"sticky" choice:"stickyport"`
+	MaxBufferSize           string `long:"max-buffer-size" default:"1MB" description:"Max buffer size to read response body"`
+	TimeoutStr              string `short:"t" long:"timeout" default:"10" description:"Timeout to wait for connection. If no time unit is given at the end, default of seconds is assumed"`
+	warningThresholdStr     string `short:"w" long:"warning" default:"" description:"If the request+response takes longer specified warning threshold, raises a warning."`
+	criticalThresholdStr    string `short:"c" long:"critical" default:"" description:"If the request+response takes longer specified critical threshold, raises a critical."`
+	expectByte              []byte
+	WaitForInterval         time.Duration `long:"wait-for-interval" default:"2s" description:"retry interval"`
+	WaitForMax              time.Duration `long:"wait-for-max" description:"time to wait for success"`
+	Interim                 time.Duration `long:"interim" default:"1s" description:"interval time after successful request for consecutive mode"`
+	TimeoutParsed           time.Duration // parsed version of the timeoutStr after possibly appending time unit seconds
+	warningThresholdParsed  time.Duration // parsed version of the warningThreshold after possibly appending time unit seconds
+	criticalThresholdParsed time.Duration // parsed version of the warningThreshold after possibly appending time unit seconds
+	Consecutive             int           `long:"consecutive" default:"1" description:"number of consecutive successful requests required"`
+	Port                    int           `short:"p" long:"port" description:"Port number"`
+	certificateWarnDays     int
+	MaxRedirects            int `long:"max-redirs" description:"Maximum redirects before giving up on following"`
+	bufferSize              uint64
+	tlsMaxVersion           uint16
+	tlsMinVersion           uint16
+	NoDiscard               bool `long:"no-discard" description:"raise error when the response body is larger then max-buffer-size"`
+	WaitFor                 bool `long:"wait-for" description:"retry until successful when enabled"`
+	SSL                     bool `short:"S" long:"ssl" description:"use https"`
+	SNI                     bool `long:"sni" description:"enable SNI"`
+	TCP4                    bool `short:"4" description:"use tcp4 only"`
+	TCP6                    bool `short:"6" description:"use tcp6 only"`
+	Version                 bool `short:"V" long:"version" description:"Show version"`
+	Verbose                 bool `short:"v" long:"verbose" description:"Show verbose output"`
+	ShowBody                bool `long:"show-body" description:"Print body content bellow status line"`
+	IgnoreCertificateChain  bool `long:"ignore-certificate-chain" description:"by default all certificates are checked in many aspects. Toggle this option to only check the leaf (final) certificate."`
 	//nolint:lll // Explanations are long
 	DontIgnoreHostCN bool `long:"dont-ignore-host-cn" description:"Certificate subject's Common Name should matches the hostname. Common Name field is now largely unused in modern web, with Subject Alternative Name fields taking their place when present. It is ignored by default, use this flag to enable it."`
 	//nolint:lll // Explanations are long
@@ -383,6 +387,30 @@ func searchForPatterns(bodyBytes *capWriter, bodyString, proto, status string, o
 	return matches, nil
 }
 
+// the request+response duration is saved onto the metadata.
+// the command line arguments might have specified warning/critical thresholds to check against.
+func checkDurationThresholds(meta *RequestMetadata, opts *commandOpts) (err *CheckResult) {
+	if opts.warningThresholdStr != "" && opts.warningThresholdParsed != 0 && meta.duration > opts.warningThresholdParsed {
+		return &CheckResult{
+			nil,
+			fmt.Sprintf("HTTP WARNING - HTTP request + response : %.3fs took longer than the warning threshold %.3fs",
+				meta.duration.Seconds(), opts.warningThresholdParsed.Seconds()),
+			WARNING,
+		}
+	}
+
+	if opts.criticalThresholdStr != "" && opts.criticalThresholdParsed != 0 && meta.duration > opts.criticalThresholdParsed {
+		return &CheckResult{
+			nil,
+			fmt.Sprintf("HTTP CRITICAL - HTTP request + response : %.3fs took longer than the warning threshold %.3fs",
+				meta.duration.Seconds(), opts.criticalThresholdParsed.Seconds()),
+			WARNING,
+		}
+	}
+
+	return nil
+}
+
 type clientRedirectError struct {
 	redirectedReq *http.Request
 	followOption  string
@@ -581,6 +609,11 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 		return "", reqErr
 	}
 
+	reqErr = checkDurationThresholds(meta, opts)
+	if reqErr != nil {
+		return "", reqErr
+	}
+
 	matches, reqErr := searchForPatterns(meta.buffer, meta.body, meta.res.Proto, meta.res.Status, opts)
 	if reqErr != nil {
 		return "", reqErr
@@ -753,9 +786,38 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 	}
 
 	var timeoutParseErr error
+
 	opts.TimeoutParsed, timeoutParseErr = time.ParseDuration(opts.TimeoutStr)
 	if timeoutParseErr != nil {
-		fmt.Fprintf(output, "Error parsing timeoutStr: %s , %s", opts.TimeoutStr, timeoutParseErr.Error())
+		fmt.Fprintf(output, "Error parsing timeoutStr: %q , %s", opts.TimeoutStr, timeoutParseErr.Error())
+
+		return UNKNOWN
+	}
+
+	warningThresholdLastRune, _ := utf8.DecodeLastRuneInString(opts.warningThresholdStr)
+	if unicode.IsDigit(warningThresholdLastRune) {
+		opts.warningThresholdStr += "s"
+	}
+
+	var warningThresholdParseErr error
+
+	opts.warningThresholdParsed, warningThresholdParseErr = time.ParseDuration(opts.warningThresholdStr)
+	if warningThresholdParseErr != nil {
+		fmt.Fprintf(output, "Error parsing warningThresholdStr: %q , %s", opts.warningThresholdStr, warningThresholdParseErr.Error())
+
+		return UNKNOWN
+	}
+
+	criticalThresholdLastRune, _ := utf8.DecodeLastRuneInString(opts.criticalThresholdStr)
+	if unicode.IsDigit(criticalThresholdLastRune) {
+		opts.criticalThresholdStr += "s"
+	}
+
+	var criticalThresholdParseErr error
+
+	opts.criticalThresholdParsed, criticalThresholdParseErr = time.ParseDuration(opts.criticalThresholdStr)
+	if criticalThresholdParseErr != nil {
+		fmt.Fprintf(output, "Error parsing criticalThresholdStr: %q , %s", opts.criticalThresholdStr, criticalThresholdParseErr.Error())
 
 		return UNKNOWN
 	}
