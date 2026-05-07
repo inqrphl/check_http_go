@@ -858,9 +858,10 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 	// If certificate check is enabled, perform certificate validation and return
 	if opts.Certificate != "" {
 		if !opts.SSL {
-			fmt.Fprintf(output, "SSL must be enabled for certificate check\n")
-
-			return UNKNOWN
+			// automatically enable SSL, this is the behavior of monitoring-plugins check_http
+			// fmt.Fprintf(output, "SSL must be enabled for certificate check\n")
+			// return UNKNOWN
+			opts.SSL = true
 		}
 
 		timeout := opts.TimeoutParsed
