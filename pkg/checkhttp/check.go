@@ -93,7 +93,7 @@ type commandOpts struct {
 	//nolint:lll // Explanations are long
 	DontIgnoreHostCN bool `long:"dont-ignore-host-cn" description:"Certificate subject's Common Name should matches the hostname. Common Name field is now largely unused in modern web, with Subject Alternative Name fields taking their place when present. It is ignored by default, use this flag to enable it."`
 	//nolint:lll // Explanations are long
-	IgnoreSAN                bool `long:"ignore-san" description:"Certificates have Subject Alternative Name fields, where the hostname/IP addresses of this certificate are listed. This is used over Subject Name is present."`
+	IgnoreSAN                bool `long:"ignore-san" description:"Certificates have Subject Alternative Name fields, where the hostname/IP addresses of this certificate are listed. This is used over Subject Common Name is present."`
 	IgnoreNotAfter           bool `long:"ignore-not-after" description:"Certificates are invalid after the timestamp in their NotAfter has passed. This field can be ignored with this flag."`
 	IgnoreNotBefore          bool `long:"ignore-not-before" description:"Certificates are invalid before the timestamp in their NotBefore is reached. This field can be ignored with this flag."`
 	IgnoreSignatureAlgorithm bool `long:"ignore-signature-algorithm" description:"Some signature algorithms are deemed insecure, and are deprecated. The algorithm used can be ignored with this flag."`
