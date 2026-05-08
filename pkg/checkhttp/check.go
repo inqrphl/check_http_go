@@ -65,11 +65,13 @@ type commandOpts struct {
 	RegexStr      string `long:"regex" description:"Search page for case-sensitive regex string"`
 	EregexStr     string `long:"eregex" description:"Search page for case-insensitive regex string"`
 	//nolint:staticcheck,lll // SA5008: multiple "choice" tags are required by our CLI parser. The line is long due to a lot of possible choices.
-	Onredirect              string `long:"onredirect" description:"What strategy to use when encountering a redirect. ok/warning/critical returns immediately. follow uses the new URL returned by golang HTTP client. Sticky keeps the IP to be same after redirect, and stickyport persists the port as well." choice:"ok" choice:"warning" choice:"critical" choice:"follow" choice:"sticky" choice:"stickyport"`
-	MaxBufferSize           string `long:"max-buffer-size" default:"1MB" description:"Max buffer size to read response body"`
-	TimeoutStr              string `short:"t" long:"timeout" default:"10" description:"Timeout to wait for connection. If no time unit is given at the end, default of seconds is assumed"`
-	warningThresholdStr     string `short:"w" long:"warning" default:"" description:"If the request+response takes longer specified warning threshold, raises a warning."`
-	criticalThresholdStr    string `short:"c" long:"critical" default:"" description:"If the request+response takes longer specified critical threshold, raises a critical."`
+	Onredirect    string `long:"onredirect" description:"What strategy to use when encountering a redirect. ok/warning/critical returns immediately. follow uses the new URL returned by golang HTTP client. Sticky keeps the IP to be same after redirect, and stickyport persists the port as well." choice:"ok" choice:"warning" choice:"critical" choice:"follow" choice:"sticky" choice:"stickyport"`
+	MaxBufferSize string `long:"max-buffer-size" default:"1MB" description:"Max buffer size to read response body"`
+	TimeoutStr    string `short:"t" long:"timeout" default:"10" description:"Timeout to wait for connection. If no time unit is given at the end, default of seconds is assumed"`
+	//nolint:lll // Explanations are long
+	WarningThresholdStr string `short:"w" long:"warning" default:"30" description:"If the request+response takes longer specified warning threshold, raises a warning. If no time unit is given at the end, default of seconds is assumed. Value is truncated to milliseconds."`
+	//nolint:lll // Explanations are long
+	CriticalThresholdStr    string `short:"c" long:"critical" default:"60" description:"If the request+response takes longer specified critical threshold, raises a critical. If no time unit is given at the end, default of seconds is assumed. Value is truncated to milliseconds."`
 	expectByte              []byte
 	WaitForInterval         time.Duration `long:"wait-for-interval" default:"2s" description:"retry interval"`
 	WaitForMax              time.Duration `long:"wait-for-max" description:"time to wait for success"`
@@ -254,7 +256,7 @@ func performHTTPRequest(req *http.Request, client *http.Client, opts *commandOpt
 	start := time.Now()
 	//nolint:gosec // G704: Server side request forgery is flagged because req is built from CLI args. This is what the tool wants.
 	res, err := client.Do(req)
-	duration := time.Since(start)
+	duration := time.Since(start).Truncate(time.Millisecond)
 
 	var redirectionErr *clientRedirectError
 
@@ -390,20 +392,22 @@ func searchForPatterns(bodyBytes *capWriter, bodyString, proto, status string, o
 // the request+response duration is saved onto the metadata.
 // the command line arguments might have specified warning/critical thresholds to check against.
 func checkDurationThresholds(meta *RequestMetadata, opts *commandOpts) (err *CheckResult) {
-	if opts.warningThresholdStr != "" && opts.warningThresholdParsed != 0 && meta.duration > opts.warningThresholdParsed {
+	statusLine := fmt.Sprintf("%s %s", meta.res.Proto, meta.res.Status)
+
+	if opts.CriticalThresholdStr != "" && opts.criticalThresholdParsed != 0 && meta.duration > opts.criticalThresholdParsed {
 		return &CheckResult{
 			nil,
-			fmt.Sprintf("HTTP WARNING - HTTP request + response : %.3fs took longer than the warning threshold %.3fs",
-				meta.duration.Seconds(), opts.warningThresholdParsed.Seconds()),
+			fmt.Sprintf("HTTP CRITICAL: %s - %d bytes in %.3f second response time (took longer than the critical threshold %.3fs) | %s",
+				statusLine, meta.buffer.Size(), meta.duration.Seconds(), opts.criticalThresholdParsed.Seconds(), buildPerfdataString(opts, meta)),
 			WARNING,
 		}
 	}
 
-	if opts.criticalThresholdStr != "" && opts.criticalThresholdParsed != 0 && meta.duration > opts.criticalThresholdParsed {
+	if opts.WarningThresholdStr != "" && opts.warningThresholdParsed != 0 && meta.duration > opts.warningThresholdParsed {
 		return &CheckResult{
 			nil,
-			fmt.Sprintf("HTTP CRITICAL - HTTP request + response : %.3fs took longer than the warning threshold %.3fs",
-				meta.duration.Seconds(), opts.criticalThresholdParsed.Seconds()),
+			fmt.Sprintf("HTTP WARNING: %s - %d bytes in %.3f second response time (took longer than the warning threshold %.3fs) | %s",
+				statusLine, meta.buffer.Size(), meta.duration.Seconds(), opts.warningThresholdParsed.Seconds(), buildPerfdataString(opts, meta)),
 			WARNING,
 		}
 	}
@@ -454,22 +458,22 @@ func clientRedirectErrorHandler(err clientRedirectError, meta *RequestMetadata, 
 	case "ok":
 		return &CheckResult{
 			nil,
-			fmt.Sprintf("HTTP OK: %d - %d bytes in %.3f second response time | time=%.3f size=%dB",
-				meta.res.StatusCode, meta.res.ContentLength, meta.duration.Seconds(), meta.duration.Seconds(), meta.res.ContentLength),
+			fmt.Sprintf("HTTP OK: %d - %d bytes in %.3f second response time | %s",
+				meta.res.StatusCode, meta.res.ContentLength, meta.duration.Seconds(), buildPerfdataString(opts, meta)),
 			OK,
 		}, nil
 	case "warning":
 		return &CheckResult{
 			nil,
-			fmt.Sprintf("HTTP WARNING: %d - %d bytes in %.3f second response time | time=%.3f size=%dB",
-				meta.res.StatusCode, meta.res.ContentLength, meta.duration.Seconds(), meta.duration.Seconds(), meta.res.ContentLength),
+			fmt.Sprintf("HTTP WARNING: %d - %d bytes in %.3f second response time | %s",
+				meta.res.StatusCode, meta.res.ContentLength, meta.duration.Seconds(), buildPerfdataString(opts, meta)),
 			WARNING,
 		}, nil
 	case "critical":
 		return &CheckResult{
 			nil,
-			fmt.Sprintf("HTTP CRITICAL: %d - %d bytes in %.3f second response time | time=%.3f size=%dB",
-				meta.res.StatusCode, meta.res.ContentLength, meta.duration.Seconds(), meta.duration.Seconds(), meta.res.ContentLength),
+			fmt.Sprintf("HTTP CRITICAL: %d - %d bytes in %.3f second response time | %s",
+				meta.res.StatusCode, meta.res.ContentLength, meta.duration.Seconds(), buildPerfdataString(opts, meta)),
 			CRITICAL,
 		}, nil
 	case "sticky", "stickyport":
@@ -511,6 +515,29 @@ func clientRedirectErrorHandler(err clientRedirectError, meta *RequestMetadata, 
 			0,
 		}, nil
 	}
+}
+
+func buildPerfdataString(opts *commandOpts, meta *RequestMetadata) string {
+	durationStr := strconv.FormatFloat(meta.duration.Seconds(), 'f', 3, 64)
+
+	var warnThresholdStr string
+	if opts.WarningThresholdStr != "" && opts.warningThresholdParsed != 0 {
+		warnThresholdStr = strconv.FormatFloat(opts.warningThresholdParsed.Seconds(), 'f', 3, 64)
+	}
+
+	var criticalThresholdStr string
+	if opts.CriticalThresholdStr != "" && opts.criticalThresholdParsed != 0 {
+		criticalThresholdStr = strconv.FormatFloat(opts.criticalThresholdParsed.Seconds(), 'f', 3, 64)
+	}
+
+	return fmt.Sprintf(`time=%ss;%s;%s;%s size=%dB;;;%d`,
+		durationStr,
+		warnThresholdStr,
+		criticalThresholdStr,
+		durationStr,
+		meta.buffer.Size(),
+		meta.buffer.Size(),
+	)
 }
 
 // if this function does not return an error, the redirection can continue
@@ -639,8 +666,10 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 		}
 	}
 
-	okMsg = fmt.Sprintf(`HTTP OK - %s - %d bytes in %.3f second response time | time=%fs;;;0.000000 size=%dB;;;0`,
-		strings.Join(matches, ", "), meta.buffer.Size(), meta.duration.Seconds(), meta.duration.Seconds(), meta.buffer.Size())
+	okMsg = fmt.Sprintf(`HTTP OK - %s - %d bytes in %.3fs response time | %s`,
+		strings.Join(matches, ", "), meta.buffer.Size(), meta.duration.Seconds(),
+		buildPerfdataString(opts, meta),
+	)
 
 	return okMsg, nil
 }
@@ -794,30 +823,34 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 		return UNKNOWN
 	}
 
-	warningThresholdLastRune, _ := utf8.DecodeLastRuneInString(opts.warningThresholdStr)
+	warningThresholdLastRune, _ := utf8.DecodeLastRuneInString(opts.WarningThresholdStr)
 	if unicode.IsDigit(warningThresholdLastRune) {
-		opts.warningThresholdStr += "s"
+		opts.WarningThresholdStr += "s"
 	}
 
 	var warningThresholdParseErr error
 
-	opts.warningThresholdParsed, warningThresholdParseErr = time.ParseDuration(opts.warningThresholdStr)
+	opts.warningThresholdParsed, warningThresholdParseErr = time.ParseDuration(opts.WarningThresholdStr)
 	if warningThresholdParseErr != nil {
-		fmt.Fprintf(output, "Error parsing warningThresholdStr: %q , %s", opts.warningThresholdStr, warningThresholdParseErr.Error())
+		fmt.Fprintf(output, "Error parsing warningThresholdStr: %q , %s", opts.WarningThresholdStr, warningThresholdParseErr.Error())
 
 		return UNKNOWN
 	}
 
-	criticalThresholdLastRune, _ := utf8.DecodeLastRuneInString(opts.criticalThresholdStr)
+	opts.warningThresholdParsed = opts.warningThresholdParsed.Truncate(time.Millisecond)
+
+	criticalThresholdLastRune, _ := utf8.DecodeLastRuneInString(opts.CriticalThresholdStr)
 	if unicode.IsDigit(criticalThresholdLastRune) {
-		opts.criticalThresholdStr += "s"
+		opts.CriticalThresholdStr += "s"
 	}
+
+	opts.criticalThresholdParsed = opts.criticalThresholdParsed.Truncate(time.Millisecond)
 
 	var criticalThresholdParseErr error
 
-	opts.criticalThresholdParsed, criticalThresholdParseErr = time.ParseDuration(opts.criticalThresholdStr)
+	opts.criticalThresholdParsed, criticalThresholdParseErr = time.ParseDuration(opts.CriticalThresholdStr)
 	if criticalThresholdParseErr != nil {
-		fmt.Fprintf(output, "Error parsing criticalThresholdStr: %q , %s", opts.criticalThresholdStr, criticalThresholdParseErr.Error())
+		fmt.Fprintf(output, "Error parsing criticalThresholdStr: %q , %s", opts.CriticalThresholdStr, criticalThresholdParseErr.Error())
 
 		return UNKNOWN
 	}
