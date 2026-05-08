@@ -633,6 +633,8 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 
 	reqErr := handleErroneousReturnCodes(meta.res, opts, meta.res.Proto, meta.res.Status)
 	if reqErr != nil {
+		reqErr.msg += " | " + buildPerfdataString(opts, meta)
+
 		return "", reqErr
 	}
 
@@ -643,6 +645,8 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 
 	matches, reqErr := searchForPatterns(meta.buffer, meta.body, meta.res.Proto, meta.res.Status, opts)
 	if reqErr != nil {
+		reqErr.msg += " | " + buildPerfdataString(opts, meta)
+
 		return "", reqErr
 	}
 
