@@ -844,8 +844,6 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 		opts.CriticalThresholdStr += "s"
 	}
 
-	opts.criticalThresholdParsed = opts.criticalThresholdParsed.Truncate(time.Millisecond)
-
 	var criticalThresholdParseErr error
 
 	opts.criticalThresholdParsed, criticalThresholdParseErr = time.ParseDuration(opts.CriticalThresholdStr)
@@ -854,6 +852,8 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 
 		return UNKNOWN
 	}
+
+	opts.criticalThresholdParsed = opts.criticalThresholdParsed.Truncate(time.Millisecond)
 
 	switch opts.TLSMinVersion {
 	// argument parser only accepts these values as valid
