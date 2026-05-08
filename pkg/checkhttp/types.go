@@ -55,9 +55,9 @@ type CheckResultPQ []*CheckResult
 
 func (pq *CheckResultPQ) Len() int { return len(*pq) }
 
-// Less: In a heap, the elemement that is most "less" compared to others is on top.
+// Less: In a heap, the element that is most "less" compared to others is on top.
 // The highest severity (CRITICAL > WARNING > OK) is more important so it wins the "less" comparison.
-// If severities are equal, check resultImportance, who has lower resultImportnace is deemed more important and wins the "less" comparison.
+// If severities are equal, check resultImportance, who has lower resultImportance is deemed more important and wins the "less" comparison.
 func (pq *CheckResultPQ) Less(item1, item2 int) bool {
 	if (*pq)[item1].Code() != (*pq)[item2].Code() {
 		return (*pq)[item1].Code() > (*pq)[item2].Code()

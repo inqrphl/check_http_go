@@ -65,7 +65,7 @@ type commandOpts struct {
 	RegexStr      string `long:"regex" description:"Search page for case-sensitive regex string"`
 	EregexStr     string `long:"eregex" description:"Search page for case-insensitive regex string"`
 	//nolint:staticcheck,lll // SA5008: multiple "choice" tags are required by our CLI parser. The line is long due to a lot of possible choices.
-	Onredirect    string `long:"onredirect" description:"What strategy to use when encountering a redirect. ok/warning/critical returns immediately. follow uses the new URL returned by golang HTTP client. Sticky keeps the IP to be same after redirect, and stickyport persists the port as well." choice:"ok" choice:"warning" choice:"critical" choice:"follow" choice:"sticky" choice:"stickyport"`
+	Onredirect    string `long:"onredirect" description:"What strategy to use when encountering a redirect. ok/warning/critical returns immediately. follow uses the new URL returned by golang HTTP client. Sticky keeps the hostname to be same after redirect, and stickyport persists the port as well." choice:"ok" choice:"warning" choice:"critical" choice:"follow" choice:"sticky" choice:"stickyport"`
 	MaxBufferSize string `long:"max-buffer-size" default:"1MB" description:"Max buffer size to read response body"`
 	TimeoutStr    string `short:"t" long:"timeout" default:"10" description:"Timeout to wait for connection. If no time unit is given at the end, default of seconds is assumed"`
 	//nolint:lll // Explanations are long
@@ -94,12 +94,12 @@ type commandOpts struct {
 	TCP6                    bool `short:"6" description:"use tcp6 only"`
 	Version                 bool `short:"V" long:"version" description:"Show version"`
 	Verbose                 bool `short:"v" long:"verbose" description:"Show verbose output"`
-	ShowBody                bool `long:"show-body" description:"Print body content bellow status line"`
+	ShowBody                bool `long:"show-body" description:"Print body content below status line"`
 	IgnoreCertificateChain  bool `long:"ignore-certificate-chain" description:"by default all certificates are checked in many aspects. Toggle this option to only check the leaf (final) certificate."`
 	//nolint:lll // Explanations are long
 	DontIgnoreHostCN bool `long:"dont-ignore-host-cn" description:"Certificate subject's Common Name should matches the hostname. Common Name field is now largely unused in modern web, with Subject Alternative Name fields taking their place when present. It is ignored by default, use this flag to enable it."`
 	//nolint:lll // Explanations are long
-	IgnoreSAN                bool `long:"ignore-san" description:"Certificates have Subject Alternative Name fields, where the hostname/IP addresses of this certificate are listed. This is used over Subject Common Name is present."`
+	IgnoreSAN                bool `long:"ignore-san" description:"Skip checking Subject Alternative Names against the hostname. SANs contain the hostnames and IP addresses this certificate is valid for."`
 	IgnoreNotAfter           bool `long:"ignore-not-after" description:"Certificates are invalid after the timestamp in their NotAfter has passed. This field can be ignored with this flag."`
 	IgnoreNotBefore          bool `long:"ignore-not-before" description:"Certificates are invalid before the timestamp in their NotBefore is reached. This field can be ignored with this flag."`
 	IgnoreSignatureAlgorithm bool `long:"ignore-signature-algorithm" description:"Some signature algorithms are deemed insecure, and are deprecated. The algorithm used can be ignored with this flag."`
@@ -333,7 +333,7 @@ func searchForPatterns(bodyBytes *capWriter, bodyString, proto, status string, o
 		if !bytes.Contains(bodyBytes.Bytes(), opts.expectByte) {
 			return matches, &CheckResult{
 				nil,
-				fmt.Sprintf(`HTTP CRITICAL - HTTP response body Not matched %q from host on port %d`, string(opts.expectByte), opts.Port),
+				fmt.Sprintf(`HTTP CRITICAL - HTTP response body not matched %q from host on port %d`, string(opts.expectByte), opts.Port),
 				CRITICAL,
 			}
 		}
@@ -434,13 +434,13 @@ func (e *clientRedirectError) Error() string {
 	case "ok":
 		str += "This means that any redirection is an OK result."
 	case "warning":
-		str += "This means that any redirection is an WARNING result."
+		str += "This means that any redirection is a WARNING result."
 	case "critical":
-		str += "This means that any redirection is an CRITICAL result."
+		str += "This means that any redirection is a CRITICAL result."
 	case "sticky":
-		str += "This means that redirections are allowed, but the hostanme/IP and the port is forced to stay the same."
+		str += "This means that redirections are allowed, but the hostname/IP and the port is forced to stay the same."
 	case "stickyport":
-		str += "This means that redirections are allowed, but the hostanme/IP and the port is forced to stay the same."
+		str += "This means that redirections are allowed, but the hostname/IP and the port is forced to stay the same."
 	}
 
 	return str
@@ -631,7 +631,7 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 		}
 	}
 
-	reqErr := handleErroneusReturnCodes(meta.res, opts, meta.res.Proto, meta.res.Status)
+	reqErr := handleErroneousReturnCodes(meta.res, opts, meta.res.Proto, meta.res.Status)
 	if reqErr != nil {
 		return "", reqErr
 	}
@@ -675,7 +675,7 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 }
 
 // If the HTTP status code is erroneus, return a non-nil err.
-func handleErroneusReturnCodes(res *http.Response, opts *commandOpts, proto, status string) (err *CheckResult) {
+func handleErroneousReturnCodes(res *http.Response, opts *commandOpts, proto, status string) (err *CheckResult) {
 	statusLine := fmt.Sprintf("%s %s", proto, status)
 	// Between 400 and 500
 	if http.StatusBadRequest <= res.StatusCode && res.StatusCode < http.StatusInternalServerError {
@@ -937,7 +937,7 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 			}
 
 			if critDays > warnDays {
-				fmt.Fprintf(output, "Certificate expiration date check: warning days is lower than critical days.\n")
+				fmt.Fprintf(output, "Certificate expiration date check: critical days cannot be higher than warning days.\n")
 
 				return UNKNOWN
 			}

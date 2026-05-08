@@ -67,7 +67,7 @@ func checkCertificate(ctx context.Context, output io.Writer, opts *commandOpts, 
 		}
 	}
 
-	// certs[0] is the leaf certificate, the certificate belonging to the site that we are visitng
+	// certs[0] is the leaf certificate, the certificate belonging to the site that we are visiting
 	// certs[1..n-1] are the intermediate certificates sign each other and go up in scope
 	// certs[n] is the root certificate. this is either from the web browser / system
 	// use a dedicated function to check the chain, the logic is too long
