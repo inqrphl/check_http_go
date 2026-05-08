@@ -397,16 +397,16 @@ func checkDurationThresholds(meta *RequestMetadata, opts *commandOpts) (err *Che
 	if opts.CriticalThresholdStr != "" && opts.criticalThresholdParsed != 0 && meta.duration > opts.criticalThresholdParsed {
 		return &CheckResult{
 			nil,
-			fmt.Sprintf("HTTP CRITICAL: %s - %d bytes in %.3f second response time (took longer than the critical threshold %.3fs) | %s",
+			fmt.Sprintf("HTTP CRITICAL - %s - %d bytes in %.3f second response time (took longer than the critical threshold %.3fs) | %s",
 				statusLine, meta.buffer.Size(), meta.duration.Seconds(), opts.criticalThresholdParsed.Seconds(), buildPerfdataString(opts, meta)),
-			WARNING,
+			CRITICAL,
 		}
 	}
 
 	if opts.WarningThresholdStr != "" && opts.warningThresholdParsed != 0 && meta.duration > opts.warningThresholdParsed {
 		return &CheckResult{
 			nil,
-			fmt.Sprintf("HTTP WARNING: %s - %d bytes in %.3f second response time (took longer than the warning threshold %.3fs) | %s",
+			fmt.Sprintf("HTTP WARNING - %s - %d bytes in %.3f second response time (took longer than the warning threshold %.3fs) | %s",
 				statusLine, meta.buffer.Size(), meta.duration.Seconds(), opts.warningThresholdParsed.Seconds(), buildPerfdataString(opts, meta)),
 			WARNING,
 		}
