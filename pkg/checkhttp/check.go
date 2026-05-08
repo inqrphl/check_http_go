@@ -162,12 +162,12 @@ func makeTransport(opts *commandOpts, dialFunc func(ctx context.Context, _ strin
 	proxy := http.ProxyFromEnvironment
 
 	if opts.Proxy != "" {
-		urll, err := url.Parse(opts.Proxy)
+		parsedURL, err := url.Parse(opts.Proxy)
 		if err != nil {
 			return nil, fmt.Errorf("Error while parsing Proxy URL. Error was: %s", err.Error())
 		}
 
-		proxy = http.ProxyURL(urll)
+		proxy = http.ProxyURL(parsedURL)
 	}
 
 	return &http.Transport{
