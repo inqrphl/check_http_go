@@ -157,6 +157,31 @@ func TestRegex(t *testing.T) {
 
 	defer cancel()
 
+	code := checkhttp.Check(ctx, &output, []string{"check_http", "-H", testHost, "-u", testURI, "-S", "-r", `HRB \d+`})
+
+	t.Logf("output: %s", output.String())
+
+	if code != checkhttp.OK {
+		t.Errorf("expected exit code OK (0), got %d", code)
+	}
+
+	if !strings.Contains(output.String(), "HRB 97371") {
+		t.Errorf("expected output to contain 'HRB 97371'")
+	}
+}
+
+func TestRegexLong(t *testing.T) {
+	t.Parallel()
+
+	if testing.Short() {
+		t.Skip("skipping network test in short mode")
+	}
+
+	var output strings.Builder
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+
+	defer cancel()
+
 	code := checkhttp.Check(ctx, &output, []string{"check_http", "-H", testHost, "-u", testURI, "-S", "--regex", `HRB \d+`})
 
 	t.Logf("output: %s", output.String())
@@ -197,7 +222,7 @@ func TestRegexNoMatch(t *testing.T) {
 }
 
 //nolint:wsl,wsl_v5 // test boilerplate follows standard pattern
-func TestEregex(t *testing.T) {
+func TestRegexiShort(t *testing.T) {
 	t.Parallel()
 
 	if testing.Short() {
@@ -209,7 +234,32 @@ func TestEregex(t *testing.T) {
 
 	defer cancel()
 
-	code := checkhttp.Check(ctx, &output, []string{"check_http", "-H", testHost, "-u", testURI, "-S", "--eregex", "consol"})
+	code := checkhttp.Check(ctx, &output, []string{"check_http", "-H", testHost, "-u", testURI, "-S", "-R", "consol"})
+
+	t.Logf("output: %s", output.String())
+
+	if code != checkhttp.OK {
+		t.Errorf("expected exit code OK (0), got %d", code)
+	}
+
+	if !strings.Contains(strings.ToLower(output.String()), "consol") {
+		t.Errorf("expected output to contain 'consol' (case-insensitive)")
+	}
+}
+
+func TestRegexiLong(t *testing.T) {
+	t.Parallel()
+
+	if testing.Short() {
+		t.Skip("skipping network test in short mode")
+	}
+
+	var output strings.Builder
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+
+	defer cancel()
+
+	code := checkhttp.Check(ctx, &output, []string{"check_http", "-H", testHost, "-u", testURI, "-S", "--regexi", "consol"})
 
 	t.Logf("output: %s", output.String())
 

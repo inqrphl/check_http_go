@@ -62,8 +62,8 @@ type commandOpts struct {
 	//nolint:staticcheck // SA5008: multiple "choice" tags are required by our CLI parser
 	TLSMaxVersion string `long:"tls-max" description:"maximum supported TLS version" choice:"1.0" choice:"1.1" choice:"1.2" choice:"1.3"`
 	Proxy         string `long:"proxy" description:"Proxy that should be used"`
-	RegexStr      string `long:"regex" description:"Search page for case-sensitive regex string"`
-	EregexStr     string `long:"eregex" description:"Search page for case-insensitive regex string"`
+	RegexStr      string `short:"r" long:"regex" description:"Search page for case-sensitive regex string"`
+	RegexiStr     string `short:"R" long:"regexi" description:"Search page for case-insensitive regex string"`
 	//nolint:staticcheck,lll // SA5008: multiple "choice" tags are required by our CLI parser. The line is long due to a lot of possible choices.
 	Onredirect    string `short:"f" long:"onredirect" description:"What strategy to use when encountering a redirect. ok/warning/critical returns immediately. follow uses the new URL returned by golang HTTP client. Sticky keeps the hostname to be same after redirect, and stickyport persists the port as well." choice:"ok" choice:"warning" choice:"critical" choice:"follow" choice:"sticky" choice:"stickyport"`
 	MaxBufferSize string `long:"max-buffer-size" default:"1MB" description:"Max buffer size to read response body"`
@@ -363,13 +363,13 @@ func searchForPatterns(bodyBytes *capWriter, bodyString, proto, status string, o
 		matches = append(matches, regexMatched...)
 	}
 
-	if opts.EregexStr != "" {
+	if opts.RegexiStr != "" {
 		// as option add (%?) case insensitive
-		regex, err := regexp.Compile("(?i)" + opts.EregexStr)
+		regex, err := regexp.Compile("(?i)" + opts.RegexiStr)
 		if err != nil {
 			return matches, &CheckResult{
 				nil,
-				fmt.Sprintf(`Could not build case insensitive regex from option: '%s'`, opts.EregexStr),
+				fmt.Sprintf(`Could not build case insensitive regex from option: '%s'`, opts.RegexiStr),
 				UNKNOWN,
 			}
 		}
@@ -378,7 +378,7 @@ func searchForPatterns(bodyBytes *capWriter, bodyString, proto, status string, o
 		if len(regexMatched) == 0 {
 			return matches, &CheckResult{
 				nil,
-				fmt.Sprintf(`HTTP CRITICAL - HTTP response body did not match eregex: '%s' from host: %s on port: %d`, opts.EregexStr, opts.Hostname, opts.Port),
+				fmt.Sprintf(`HTTP CRITICAL - HTTP response body did not match eregex: '%s' from host: %s on port: %d`, opts.RegexiStr, opts.Hostname, opts.Port),
 				CRITICAL,
 			}
 		}
