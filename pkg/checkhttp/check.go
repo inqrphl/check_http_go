@@ -433,7 +433,7 @@ func checkDurationThresholds(meta *RequestMetadata, opts *commandOpts) (err *Che
 	if opts.CriticalThresholdStr != "" && opts.criticalThresholdParsed != 0 && meta.duration > opts.criticalThresholdParsed {
 		return &CheckResult{
 			nil,
-			fmt.Sprintf("HTTP CRITICAL - %s - %d bytes in %.3f second response time (took longer than the critical threshold %.3fs) | %s",
+			fmt.Sprintf("HTTP CRITICAL: %s - %d bytes in %.3f second response time (took longer than the critical threshold %.3fs) | %s",
 				statusLine, meta.buffer.Size(), meta.duration.Seconds(), opts.criticalThresholdParsed.Seconds(), buildPerfdataString(opts, meta)),
 			CRITICAL,
 		}
@@ -442,7 +442,7 @@ func checkDurationThresholds(meta *RequestMetadata, opts *commandOpts) (err *Che
 	if opts.WarningThresholdStr != "" && opts.warningThresholdParsed != 0 && meta.duration > opts.warningThresholdParsed {
 		return &CheckResult{
 			nil,
-			fmt.Sprintf("HTTP WARNING - %s - %d bytes in %.3f second response time (took longer than the warning threshold %.3fs) | %s",
+			fmt.Sprintf("HTTP WARNING: %s - %d bytes in %.3f second response time (took longer than the warning threshold %.3fs) | %s",
 				statusLine, meta.buffer.Size(), meta.duration.Seconds(), opts.warningThresholdParsed.Seconds(), buildPerfdataString(opts, meta)),
 			WARNING,
 		}
@@ -483,6 +483,8 @@ func (e *clientRedirectError) Error() string {
 }
 
 func clientRedirectErrorHandler(err clientRedirectError, meta *RequestMetadata, opts *commandOpts) (checkResult *CheckResult, nextReq *http.Request) {
+	statusLine := fmt.Sprintf("%s %s", meta.res.Proto, meta.res.Status)
+
 	switch err.followOption {
 	case "":
 		return nil, nil
@@ -494,22 +496,22 @@ func clientRedirectErrorHandler(err clientRedirectError, meta *RequestMetadata, 
 	case "ok":
 		return &CheckResult{
 			nil,
-			fmt.Sprintf("HTTP OK: %d - %d bytes in %.3f second response time | %s",
-				meta.res.StatusCode, meta.res.ContentLength, meta.duration.Seconds(), buildPerfdataString(opts, meta)),
+			fmt.Sprintf("HTTP OK: %s - %d bytes in %.3f second response time | %s",
+				statusLine, meta.res.ContentLength, meta.duration.Seconds(), buildPerfdataString(opts, meta)),
 			OK,
 		}, nil
 	case "warning":
 		return &CheckResult{
 			nil,
-			fmt.Sprintf("HTTP WARNING: %d - %d bytes in %.3f second response time | %s",
-				meta.res.StatusCode, meta.res.ContentLength, meta.duration.Seconds(), buildPerfdataString(opts, meta)),
+			fmt.Sprintf("HTTP WARNING: %s - %d bytes in %.3f second response time | %s",
+				statusLine, meta.res.ContentLength, meta.duration.Seconds(), buildPerfdataString(opts, meta)),
 			WARNING,
 		}, nil
 	case "critical":
 		return &CheckResult{
 			nil,
-			fmt.Sprintf("HTTP CRITICAL: %d - %d bytes in %.3f second response time | %s",
-				meta.res.StatusCode, meta.res.ContentLength, meta.duration.Seconds(), buildPerfdataString(opts, meta)),
+			fmt.Sprintf("HTTP CRITICAL: %s - %d bytes in %.3f second response time | %s",
+				statusLine, meta.res.ContentLength, meta.duration.Seconds(), buildPerfdataString(opts, meta)),
 			CRITICAL,
 		}, nil
 	case "sticky", "stickyport":
@@ -547,7 +549,7 @@ func clientRedirectErrorHandler(err clientRedirectError, meta *RequestMetadata, 
 	default:
 		return &CheckResult{
 			nil,
-			"HTTP UNKNOWN: Unknown follow strategy: " + err.followOption,
+			fmt.Sprintf("HTTP UNKNOWN: %s - Unknown follow strategy: %s", statusLine, err.followOption),
 			0,
 		}, nil
 	}
@@ -734,7 +736,7 @@ func handleErroneousReturnCodes(res *http.Response, opts *commandOpts, meta *Req
 	if http.StatusBadRequest <= res.StatusCode && res.StatusCode < http.StatusInternalServerError {
 		return &CheckResult{
 			nil,
-			fmt.Sprintf("HTTP WARNING - Invalid HTTP response received from host on port %d: %s", opts.Port, statusLine),
+			fmt.Sprintf("HTTP WARNING: %s - Invalid HTTP response received", statusLine),
 			WARNING,
 		}
 	}
@@ -743,7 +745,7 @@ func handleErroneousReturnCodes(res *http.Response, opts *commandOpts, meta *Req
 	if http.StatusInternalServerError <= res.StatusCode {
 		return &CheckResult{
 			nil,
-			fmt.Sprintf("HTTP CRITICAL - Invalid HTTP response received from host on port %d: %s", opts.Port, statusLine),
+			fmt.Sprintf("HTTP CRITICAL: %s - Invalid HTTP response received", statusLine),
 			CRITICAL,
 		}
 	}
