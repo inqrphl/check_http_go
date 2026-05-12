@@ -71,8 +71,7 @@ type commandOpts struct {
 	//nolint:lll // Explanations are long
 	WarningThresholdStr string `short:"w" long:"warning" default:"30" description:"If the request+response takes longer specified warning threshold, raises a warning. If no time unit is given at the end, default of seconds is assumed. Value is truncated to milliseconds."`
 	//nolint:lll // Explanations are long
-	CriticalThresholdStr    string `short:"c" long:"critical" default:"60" description:"If the request+response takes longer specified critical threshold, raises a critical. If no time unit is given at the end, default of seconds is assumed. Value is truncated to milliseconds."`
-	expectByte              []byte
+	CriticalThresholdStr    string        `short:"c" long:"critical" default:"60" description:"If the request+response takes longer specified critical threshold, raises a critical. If no time unit is given at the end, default of seconds is assumed. Value is truncated to milliseconds."`
 	WaitForInterval         time.Duration `long:"wait-for-interval" default:"2s" description:"retry interval"`
 	WaitForMax              time.Duration `long:"wait-for-max" description:"time to wait for success"`
 	Interim                 time.Duration `long:"interim" default:"1s" description:"interval time after successful request for consecutive mode"`
@@ -328,18 +327,18 @@ func performHTTPRequest(req *http.Request, client *http.Client, opts *commandOpt
 	}, nil
 }
 
-// Check the body of the response for patterns.
-// If a status code / byte sequence / regex is wanted and is not present return an error.
-// If they are present, add them to the list of matches.
-func searchForPatterns(meta *RequestMetadata, opts *commandOpts) (matches []string, err *CheckResult) {
-	if opts.Verbose {
-		log.Printf("searching for patterns")
-	}
+func getStatusLine(meta *RequestMetadata) string {
+	return fmt.Sprintf("%s %s", meta.req.Proto, meta.res.Status)
+}
 
-	statusLine := fmt.Sprintf("%s %s", meta.req.Proto, meta.res.Status)
-
-	// matched portions in the page
+func subcheckStatusLine(meta *RequestMetadata, opts *commandOpts) (matches []string, err *CheckResult) {
 	if len(opts.Expect) > 0 {
+		if opts.Verbose {
+			log.Printf("subcheck: status line")
+		}
+
+		statusLine := getStatusLine(meta)
+
 		found := false
 		for _, exceptedStatusLine := range opts.Expect {
 			if strings.Contains(statusLine, exceptedStatusLine) {
@@ -362,19 +361,65 @@ func searchForPatterns(meta *RequestMetadata, opts *commandOpts) (matches []stri
 		}
 	}
 
-	if len(opts.expectByte) > 0 {
-		if !bytes.Contains(meta.buffer.Bytes(), opts.expectByte) {
+	return matches, nil
+}
+
+func subcheckExpectedContent(meta *RequestMetadata, opts *commandOpts) (matches []string, err *CheckResult) {
+	if len(opts.ExpectContent) > 0 {
+		if opts.Verbose {
+			log.Printf("subcheck: expected content")
+		}
+		statusLine := getStatusLine(meta)
+		if !strings.Contains(meta.body, opts.ExpectContent) {
 			return matches, &CheckResult{
 				nil,
-				fmt.Sprintf(`HTTP CRITICAL: %s - response body not matched bytes %v from`, statusLine, opts.expectByte),
+				fmt.Sprintf(`HTTP CRITICAL: %s - response body not matched content: %s`, statusLine, opts.ExpectContent),
 				CRITICAL,
 			}
 		}
 
-		matches = append(matches, fmt.Sprintf(`%s`, string(opts.expectByte)))
+		matches = append(matches, opts.ExpectContent)
 	}
 
+	return matches, nil
+}
+
+func subcheckBase64ExpectedContent(meta *RequestMetadata, opts *commandOpts) (matches []string, err *CheckResult) {
+	if opts.Base64ExpectContent != "" {
+		if opts.Verbose {
+			log.Printf("subcheck: expected content")
+		}
+		statusLine := getStatusLine(meta)
+
+		data, decodeErr := base64.StdEncoding.DecodeString(opts.Base64ExpectContent)
+		if decodeErr != nil {
+			return matches, &CheckResult{
+				nil,
+				fmt.Sprintf(`HTTP CRITICAL: %s - failed to decode base64 string: %s`, statusLine, opts.Base64ExpectContent),
+				CRITICAL,
+			}
+		}
+
+		if !bytes.Contains(meta.buffer.Bytes(), data) {
+			return matches, &CheckResult{
+				nil,
+				fmt.Sprintf(`HTTP CRITICAL: %s - response body not matched content: %s`, statusLine, opts.Base64ExpectContent),
+				CRITICAL,
+			}
+		}
+
+		matches = append(matches, string(data))
+	}
+
+	return matches, nil
+}
+
+func subcheckRegex(meta *RequestMetadata, opts *commandOpts) (matches []string, err *CheckResult) {
 	if opts.RegexStr != "" {
+		if opts.Verbose {
+			log.Printf("subcheck: regex")
+		}
+		statusLine := getStatusLine(meta)
 		regex, err := regexp.Compile(opts.RegexStr)
 		if err != nil {
 			return matches, &CheckResult{
@@ -396,7 +441,15 @@ func searchForPatterns(meta *RequestMetadata, opts *commandOpts) (matches []stri
 		matches = append(matches, regexMatched...)
 	}
 
+	return matches, nil
+}
+
+func subcheckRegexi(meta *RequestMetadata, opts *commandOpts) (matches []string, err *CheckResult) {
 	if opts.RegexiStr != "" {
+		if opts.Verbose {
+			log.Printf("subcheck: regexi")
+		}
+		statusLine := getStatusLine(meta)
 		// as option add (%?) case insensitive
 		regex, err := regexp.Compile("(?i)" + opts.RegexiStr)
 		if err != nil {
@@ -411,7 +464,7 @@ func searchForPatterns(meta *RequestMetadata, opts *commandOpts) (matches []stri
 		if len(regexMatched) == 0 {
 			return matches, &CheckResult{
 				nil,
-				fmt.Sprintf(`HTTP CRITICAL: %s - HTTP response body did not match eregex: '%s'`, statusLine, opts.RegexiStr),
+				fmt.Sprintf(`HTTP CRITICAL: %s - HTTP response body did not match case insensitive regex: '%s'`, statusLine, opts.RegexiStr),
 				CRITICAL,
 			}
 		}
@@ -428,7 +481,7 @@ func checkDurationThresholds(meta *RequestMetadata, opts *commandOpts) (err *Che
 	if opts.Verbose {
 		log.Printf("checking duration thresholds")
 	}
-	statusLine := fmt.Sprintf("%s %s", meta.res.Proto, meta.res.Status)
+	statusLine := getStatusLine(meta)
 
 	if opts.CriticalThresholdStr != "" && opts.criticalThresholdParsed != 0 && meta.duration > opts.criticalThresholdParsed {
 		return &CheckResult{
@@ -483,7 +536,7 @@ func (e *clientRedirectError) Error() string {
 }
 
 func clientRedirectErrorHandler(err clientRedirectError, meta *RequestMetadata, opts *commandOpts) (checkResult *CheckResult, nextReq *http.Request) {
-	statusLine := fmt.Sprintf("%s %s", meta.res.Proto, meta.res.Status)
+	statusLine := getStatusLine(meta)
 
 	switch err.followOption {
 	case "":
@@ -672,22 +725,70 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 	}
 
 	var reqErr *CheckResult
+	matches := []string{}
 
-	reqErr = checkDurationThresholds(meta, opts)
-	if reqErr != nil {
-		return "", reqErr
-	}
+	// Need to mimic the order HTTP checks are made
+	// Status line check (--expect)
+	// Header string check (--header-string)
+	// Content string check (--string)
+	// Case-sensitive regex (--regex)
+	// Case-insensitive regex (--eregi)
+	// Page size check
 
-	matches, reqErr := searchForPatterns(meta, opts)
+	// erroneus status codes check
+
+	matchesStatusLine, reqErr := subcheckStatusLine(meta, opts)
 	if reqErr != nil {
 		reqErr.msg += " | " + buildPerfdataString(opts, meta)
 
 		return "", reqErr
 	}
+	matches = append(matches, matchesStatusLine...)
+
+	// Header string checks are not yet implemented
+
+	matchesContent, reqErr := subcheckExpectedContent(meta, opts)
+	if reqErr != nil {
+		reqErr.msg += " | " + buildPerfdataString(opts, meta)
+
+		return "", reqErr
+	}
+	matches = append(matches, matchesContent...)
+
+	matchesBase64Content, reqErr := subcheckBase64ExpectedContent(meta, opts)
+	if reqErr != nil {
+		reqErr.msg += " | " + buildPerfdataString(opts, meta)
+
+		return "", reqErr
+	}
+	matches = append(matches, matchesBase64Content...)
+
+	matchesRegex, reqErr := subcheckRegex(meta, opts)
+	if reqErr != nil {
+		reqErr.msg += " | " + buildPerfdataString(opts, meta)
+
+		return "", reqErr
+	}
+	matches = append(matches, matchesRegex...)
+
+	matchesRegexi, reqErr := subcheckRegexi(meta, opts)
+	if reqErr != nil {
+		reqErr.msg += " | " + buildPerfdataString(opts, meta)
+
+		return "", reqErr
+	}
+	matches = append(matches, matchesRegexi...)
 
 	matchesOutputStr := ""
 	if len(matches) > 0 {
 		matchesOutputStr = fmt.Sprintf("Response body matched: [%s] - ", strings.Join(matches, ", "))
+	}
+
+	// Page size check is not yet implemented
+
+	reqErr = checkDurationThresholds(meta, opts)
+	if reqErr != nil {
+		return "", reqErr
 	}
 
 	reqErr = handleErroneousReturnCodes(meta.res, opts, meta)
@@ -697,13 +798,13 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 		return "", reqErr
 	}
 
-	statusLine := fmt.Sprintf("%s %s", meta.res.Proto, meta.res.Status)
+	statusLine := getStatusLine(meta)
 
 	_, err = meta.buffer.Write([]byte(statusLine + "\r\n\r\n"))
 	if err != nil {
 		return "", &CheckResult{
 			nil,
-			fmt.Sprintf("HTTP UNKNOWN - Error when performing request: %s", err),
+			fmt.Sprintf("HTTP UNKNOWN - Error when writing statusLine to buffer: %s", err),
 			UNKNOWN,
 		}
 	}
@@ -712,7 +813,7 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 	if err != nil {
 		return "", &CheckResult{
 			nil,
-			fmt.Sprintf("HTTP UNKNOWN - Error when performing request: %s", err),
+			fmt.Sprintf("HTTP UNKNOWN - Error when writing header to buffer: %s", err),
 			UNKNOWN,
 		}
 	}
@@ -727,6 +828,13 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 
 // If the HTTP status code is erroneus, return a non-nil err.
 func handleErroneousReturnCodes(res *http.Response, opts *commandOpts, meta *RequestMetadata) (err *CheckResult) {
+	// 1xx (Informational)    → STATE_OK (success)
+	// 2xx (Success)          → STATE_OK (success)
+	// 3xx (Redirection)      → Depends on --onredirect setting
+	// 4xx (Client Error)     → STATE_WARNING
+	// 5xx (Server Error)     → STATE_CRITICAL
+	// < 100 or >= 600        → STATE_CRITICAL (invalid status code)
+
 	if opts.Verbose {
 		log.Printf("checking for erroneus error codes")
 	}
@@ -797,19 +905,13 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 		return UNKNOWN
 	}
 
-	if opts.ExpectContent != "" {
-		opts.expectByte = []byte(opts.ExpectContent)
-	}
-
 	if opts.Base64ExpectContent != "" {
-		data, decodeErr := base64.StdEncoding.DecodeString(opts.Base64ExpectContent)
+		_, decodeErr := base64.StdEncoding.DecodeString(opts.Base64ExpectContent)
 		if decodeErr != nil {
 			fmt.Fprintf(output, "Failed decode base64-string: %v\n", decodeErr)
 
 			return UNKNOWN
 		}
-
-		opts.expectByte = data
 	}
 
 	if opts.TCP4 && opts.TCP6 {
