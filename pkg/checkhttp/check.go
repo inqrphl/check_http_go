@@ -58,14 +58,13 @@ type commandOpts struct {
 	Authorization       string   `short:"a" long:"authorization" description:"username:password on sites with basic authentication"`
 	//nolint:lll // Explanations are long
 	Certificate string `short:"C" long:"certificate" description:"check certificates instead of content. Specified in mandatory days left to warn and optional days to crit with a comma: warn_days[,<crit_days>]" `
-	//nolint:staticcheck,lll // SA5008: multiple "choice" tags are required by our CLI parser. The line is long due to a lot of possible choices.
+	//nolint:lll // The line is long due to a lot of possible choices.
 	TLSMinVersion string `long:"tls-min" description:"minimum supported TLS version. Values with plus set the max tls version as well to latest version: 1.3" choice:"1.0" choice:"1.0+" choice:"1.1" choice:"1.1+" choice:"1.2" choice:"1.2+" choice:"1.3"`
-	//nolint:staticcheck // SA5008: multiple "choice" tags are required by our CLI parser
 	TLSMaxVersion string `long:"tls-max" description:"maximum supported TLS version" choice:"1.0" choice:"1.1" choice:"1.2" choice:"1.3"`
 	Proxy         string `long:"proxy" description:"Proxy that should be used"`
 	RegexStr      string `short:"r" long:"regex" description:"Search page for case-sensitive regex string"`
 	RegexiStr     string `short:"R" long:"regexi" description:"Search page for case-insensitive regex string"`
-	//nolint:staticcheck,lll // SA5008: multiple "choice" tags are required by our CLI parser. The line is long due to a lot of possible choices.
+	//nolint:lll // The line is long due to a lot of possible choices.
 	Onredirect    string `short:"f" long:"onredirect" description:"What strategy to use when encountering a redirect. ok/warning/critical returns immediately. follow uses the new URL returned by golang HTTP client. Sticky keeps the hostname to be same after redirect, and stickyport persists the port as well." choice:"ok" choice:"warning" choice:"critical" choice:"follow" choice:"sticky" choice:"stickyport"`
 	MaxBufferSize string `long:"max-buffer-size" default:"1MB" description:"Max buffer size to read response body"`
 	TimeoutStr    string `short:"t" long:"timeout" default:"10" description:"Timeout to wait for connection. If no time unit is given at the end, default of seconds is assumed"`

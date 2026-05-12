@@ -1,0 +1,8 @@
+{
+    "gopls": {
+        "ui.diagnostic.analyses": {
+            "SA5008": false
+        }
+    }
+
+}
