@@ -567,12 +567,10 @@ func buildPerfdataString(opts *commandOpts, meta *RequestMetadata) string {
 		criticalThresholdStr = strconv.FormatFloat(opts.criticalThresholdParsed.Seconds(), 'f', 3, 64)
 	}
 
-	return fmt.Sprintf(`time=%ss;%s;%s;0;%s size=%dB;;;0;%d`,
+	return fmt.Sprintf(`time=%ss;%s;%s;0; size=%dB;;;0`,
 		durationStr,
 		warnThresholdStr,
 		criticalThresholdStr,
-		durationStr,
-		meta.buffer.Size(),
 		meta.buffer.Size(),
 	)
 }
