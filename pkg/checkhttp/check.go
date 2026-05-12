@@ -65,7 +65,7 @@ type commandOpts struct {
 	RegexStr      string `long:"regex" description:"Search page for case-sensitive regex string"`
 	EregexStr     string `long:"eregex" description:"Search page for case-insensitive regex string"`
 	//nolint:staticcheck,lll // SA5008: multiple "choice" tags are required by our CLI parser. The line is long due to a lot of possible choices.
-	Onredirect    string `long:"onredirect" description:"What strategy to use when encountering a redirect. ok/warning/critical returns immediately. follow uses the new URL returned by golang HTTP client. Sticky keeps the hostname to be same after redirect, and stickyport persists the port as well." choice:"ok" choice:"warning" choice:"critical" choice:"follow" choice:"sticky" choice:"stickyport"`
+	Onredirect    string `short:"f" long:"onredirect" description:"What strategy to use when encountering a redirect. ok/warning/critical returns immediately. follow uses the new URL returned by golang HTTP client. Sticky keeps the hostname to be same after redirect, and stickyport persists the port as well." choice:"ok" choice:"warning" choice:"critical" choice:"follow" choice:"sticky" choice:"stickyport"`
 	MaxBufferSize string `long:"max-buffer-size" default:"1MB" description:"Max buffer size to read response body"`
 	TimeoutStr    string `short:"t" long:"timeout" default:"10" description:"Timeout to wait for connection. If no time unit is given at the end, default of seconds is assumed"`
 	//nolint:lll // Explanations are long
