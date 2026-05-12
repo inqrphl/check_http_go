@@ -294,8 +294,8 @@ func TestBase64String(t *testing.T) {
 		t.Errorf("expected exit code OK (0), got %d", code)
 	}
 
-	if !strings.Contains(output.String(), `Response body matched "ConSol"`) {
-		t.Errorf("expected output to contain 'Response body matched \"ConSol\"'")
+	if !strings.Contains(output.String(), `Response body matched: [ConSol]`) {
+		t.Errorf("expected output to contain: 'Response body matched: [ConSol]'")
 	}
 }
 
@@ -320,8 +320,8 @@ func TestStringContent(t *testing.T) {
 		t.Errorf("expected exit code OK (0), got %d", code)
 	}
 
-	if !strings.Contains(output.String(), `Response body matched "Commercial register"`) {
-		t.Errorf("expected output to contain 'Response body matched \"Commercial register\"'")
+	if !strings.Contains(output.String(), `Response body matched: [Commercial register]`) {
+		t.Errorf("expected output to contain 'Response body matched: [Commercial register]'")
 	}
 }
 
