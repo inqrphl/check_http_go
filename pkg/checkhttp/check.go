@@ -818,9 +818,14 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 		}
 	}
 
-	okMsg = fmt.Sprintf(`HTTP OK: %s - %s %d bytes in %.3fs response time | %s`,
+	showBodyStr := ""
+	if opts.ShowBody {
+		showBodyStr = fmt.Sprintf("\n%s", meta.body)
+	}
+
+	okMsg = fmt.Sprintf(`HTTP OK: %s - %s %d bytes in %.3fs response time | %s %s`,
 		statusLine, matchesOutputStr, meta.buffer.Size(), meta.duration.Seconds(),
-		buildPerfdataString(opts, meta),
+		buildPerfdataString(opts, meta), showBodyStr,
 	)
 
 	return okMsg, nil
