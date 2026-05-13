@@ -378,7 +378,7 @@ func subcheckExpectedContent(meta *RequestMetadata, opts *commandOpts) (matches 
 			}
 		}
 
-		matches = append(matches, opts.ExpectContent)
+		matches = append(matches, fmt.Sprintf("string: '%s'", opts.ExpectContent))
 	}
 
 	return matches, nil
@@ -408,7 +408,7 @@ func subcheckBase64ExpectedContent(meta *RequestMetadata, opts *commandOpts) (ma
 			}
 		}
 
-		matches = append(matches, string(data))
+		matches = append(matches, fmt.Sprintf("base64: '%s' , string: '%s'", opts.Base64ExpectContent, string(data)))
 	}
 
 	return matches, nil
@@ -438,7 +438,7 @@ func subcheckRegex(meta *RequestMetadata, opts *commandOpts) (matches []string, 
 			}
 		}
 
-		matches = append(matches, regexMatched...)
+		matches = append(matches, fmt.Sprintf("regex: '%s' , matches: '%s'", opts.RegexStr, strings.Join(regexMatched, ",")))
 	}
 
 	return matches, nil
@@ -469,7 +469,7 @@ func subcheckRegexi(meta *RequestMetadata, opts *commandOpts) (matches []string,
 			}
 		}
 
-		matches = append(matches, regexMatched...)
+		matches = append(matches, fmt.Sprintf("regexi: '%s' , matches: '%s'", opts.RegexiStr, strings.Join(regexMatched, ",")))
 	}
 
 	return matches, nil
