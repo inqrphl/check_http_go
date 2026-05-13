@@ -791,7 +791,7 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 		return "", reqErr
 	}
 
-	reqErr = handleErroneousReturnCodes(meta.res, opts, meta)
+	reqErr = handleErroneousHTTPReturnCodes(meta.res, opts, meta)
 	if reqErr != nil {
 		reqErr.msg += " | " + buildPerfdataString(opts, meta)
 
@@ -827,7 +827,12 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 }
 
 // If the HTTP status code is erroneus, return a non-nil err.
-func handleErroneousReturnCodes(res *http.Response, opts *commandOpts, meta *RequestMetadata) (err *CheckResult) {
+func handleErroneousHTTPReturnCodes(res *http.Response, opts *commandOpts, meta *RequestMetadata) (err *CheckResult) {
+	if len(opts.Expect) > 0 {
+		// if a statusLine is expected, HTTP error code checks are disabled
+		return nil
+	}
+
 	// 1xx (Informational)    → STATE_OK (success)
 	// 2xx (Success)          → STATE_OK (success)
 	// 3xx (Redirection)      → Depends on --onredirect setting
@@ -836,7 +841,7 @@ func handleErroneousReturnCodes(res *http.Response, opts *commandOpts, meta *Req
 	// < 100 or >= 600        → STATE_CRITICAL (invalid status code)
 
 	if opts.Verbose {
-		log.Printf("checking for erroneus error codes")
+		log.Printf("checking for erroneus HTTP return codes")
 	}
 
 	statusLine := fmt.Sprintf("%s %s", meta.res.Proto, meta.res.Status)
