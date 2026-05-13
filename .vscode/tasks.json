@@ -2,24 +2,6 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "build-snclient-linux-amd64",
-            "type": "shell",
-            "command": "make build-linux-amd64",
-            "group": {
-                "kind": "build",
-                "isDefault": true
-            },
-            "presentation": {
-                "echo": true,
-                "reveal": "always",
-                "focus": false,
-                "panel": "shared",
-                "showReuseMessage": true,
-                "clear": true
-            },
-            "problemMatcher": []
-        },
-        {
             "label": "build linux-amd64 debug",
             "type": "shell",
             // Overriding the BUILD_FLAGS makefile variable, it removes the -s -w flags that would have stripped debug information from the binary
