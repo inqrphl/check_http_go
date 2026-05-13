@@ -818,7 +818,7 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 		}
 	}
 
-	okMsg = fmt.Sprintf(`HTTP OK: %s - %s %d bytes in %.3fs response time %s`,
+	okMsg = fmt.Sprintf(`HTTP OK: %s - %s %d bytes in %.3fs response time | %s`,
 		statusLine, matchesOutputStr, meta.buffer.Size(), meta.duration.Seconds(),
 		buildPerfdataString(opts, meta),
 	)
