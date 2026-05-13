@@ -25,7 +25,7 @@ import (
 	"github.com/sni/go-flags"
 )
 
-const version = "0.020"
+const version = "0.3"
 
 const (
 	UNKNOWN  = 3
