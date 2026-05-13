@@ -362,7 +362,7 @@ func subcheckStatusLine(meta *RequestMetadata, opts *commandOpts) (matches []str
 		} else {
 			return []string{}, &CheckResult{
 				nil,
-				fmt.Sprintf("HTTP CRITICAL: %s - response status line: '%s' does not contain of the specified options: '%v'", statusLine, statusLine, opts.Expect),
+				fmt.Sprintf("HTTP CRITICAL: %s - response status line: '%s' does not match any of the specified options: '%v'", statusLine, statusLine, opts.Expect),
 				CRITICAL,
 			}
 		}
@@ -381,7 +381,7 @@ func subcheckExpectedContent(meta *RequestMetadata, opts *commandOpts) (matches 
 		if !strings.Contains(meta.body, opts.ExpectContent) {
 			return matches, &CheckResult{
 				nil,
-				fmt.Sprintf(`HTTP CRITICAL: %s - response body not matched content: %s`, statusLine, opts.ExpectContent),
+				fmt.Sprintf(`HTTP CRITICAL: %s - response body did not match content: %s`, statusLine, opts.ExpectContent),
 				CRITICAL,
 			}
 		}
@@ -444,7 +444,7 @@ func subcheckRegex(meta *RequestMetadata, opts *commandOpts) (matches []string, 
 		if len(regexMatched) == 0 {
 			return matches, &CheckResult{
 				nil,
-				fmt.Sprintf(`HTTP CRITICAL: %s - HTTP response body did not match regex: '%s' `, statusLine, opts.RegexStr),
+				fmt.Sprintf(`HTTP CRITICAL: %s - HTTP response body did not match regex: '%s'`, statusLine, opts.RegexStr),
 				CRITICAL,
 			}
 		}

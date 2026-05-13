@@ -380,7 +380,8 @@ func TestExpectStatusCode(t *testing.T) {
 		t.Errorf("expected exit code OK (0), got %d", code)
 	}
 
-	if !strings.Contains(output.String(), `Status line output`) {
-		t.Errorf("expected output to contain 'Status line output'")
+	expectedStr := `matched option '200'`
+	if !strings.Contains(output.String(), expectedStr) {
+		t.Errorf("expected output to contain '%s'", expectedStr)
 	}
 }
