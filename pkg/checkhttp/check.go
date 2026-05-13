@@ -50,7 +50,8 @@ type commandOpts struct {
 	IPAddress           string `short:"I" long:"IP-address" description:"IP address or Host name"`
 	Method              string `short:"j" long:"method" default:"GET" description:"Set HTTP Method"`
 	URI                 string `short:"u" long:"uri" default:"/" description:"URI to request"`
-	ExpectStr           string `short:"e" long:"expect" default:"" description:"Comma-delimited list of expected HTTP response status"`
+	//nolint:lll // Explanations are long, what can I do
+	ExpectStr           string `short:"e" long:"expect" default:"" description:"Comma-delimited list of expected HTTP response status. By default, 1XX, 2XX are OK, 3XX depends on --onredirect option, 4XX are WARNING, 5XX are CRITICAL"`
 	ExpectContent       string `short:"s" long:"string" description:"String to expect in the content"`
 	Base64ExpectContent string `long:"base64-string" description:"Base64 Encoded string to expect the content"`
 	UserAgent           string `short:"A" long:"useragent" default:"check_http" description:"UserAgent to be sent"`
