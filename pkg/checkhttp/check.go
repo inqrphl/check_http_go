@@ -339,23 +339,23 @@ func subcheckStatusLine(meta *RequestMetadata, opts *commandOpts) (matches []str
 
 		statusLine := getStatusLine(meta)
 
-		found := false
+		foundOption := ""
 		for _, exceptedStatusLine := range opts.Expect {
 			if strings.Contains(statusLine, exceptedStatusLine) {
 				if opts.Verbose {
-					log.Printf("response stausLine: %s contains expected status line: %s", statusLine, exceptedStatusLine)
+					log.Printf("response staus line: '%s' contains expected status line option: '%s'", statusLine, exceptedStatusLine)
 				}
-				found = true
+				foundOption = exceptedStatusLine
 				break
 			}
 		}
 
-		if found {
-			matches = append(matches, fmt.Sprintf(`Status line output %q matched %q`, statusLine, opts.ExpectStr))
+		if foundOption != "" {
+			matches = append(matches, fmt.Sprintf(`response status line: '%s' matched option '%s'`, statusLine, foundOption))
 		} else {
 			return []string{}, &CheckResult{
 				nil,
-				fmt.Sprintf("HTTP CRITICAL: %s - invalid status line, does not contain any options: %v", statusLine, opts.Expect),
+				fmt.Sprintf("HTTP CRITICAL: %s - response status line: '%s' does not contain of the specified options: '%v'", statusLine, statusLine, opts.Expect),
 				CRITICAL,
 			}
 		}
