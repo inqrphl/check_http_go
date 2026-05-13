@@ -87,6 +87,76 @@
             ],
             "env": {},
             "preLaunchTask": "build linux-amd64 debug"
+        },
+        {
+            "name": "check_http -v --hostname google.com --certificate 100,100 --ssl",
+            "type": "go",
+            "request": "launch",
+            "mode": "exec",
+            "program": "${workspaceFolder}/check_http.linux.amd64",
+            "args": [
+                "-v",
+                "--hostname",
+                "google.com",
+                "--certificate",
+                "100,100",
+                "--ssl",
+            ],
+            "env": {},
+            "preLaunchTask": "build linux-amd64 debug"
+        },
+        {
+            "name": "check_http -v --hostname google.com --ssl -w 5 -c 10",
+            "type": "go",
+            "request": "launch",
+            "mode": "exec",
+            "program": "${workspaceFolder}/check_http.linux.amd64",
+            "args": [
+                "-v",
+                "--hostname",
+                "google.com",
+                "--ssl",
+                "-w",
+                "5",
+                "-c",
+                "10"
+            ],
+            "env": {},
+            "preLaunchTask": "build linux-amd64 debug"
+        },
+        {
+            "name": "check_http -v --hostname google.com --ssl -f follow",
+            "type": "go",
+            "request": "launch",
+            "mode": "exec",
+            "program": "${workspaceFolder}/check_http.linux.amd64",
+            "args": [
+                "-v",
+                "--hostname",
+                "google.com",
+                "--ssl",
+                "-f",
+                "follow"
+            ],
+            "env": {},
+            "preLaunchTask": "build linux-amd64 debug"
+        },
+        {
+            "name": "check_http -v --hostname google.com --ssl --onredirect follow",
+            "type": "go",
+            "request": "launch",
+            "mode": "exec",
+            "program": "${workspaceFolder}/check_http.linux.amd64",
+            "args": [
+                "-v",
+                "--hostname",
+                "google.com",
+                "--ssl",
+                "--onredirect",
+                "follow"
+            ],
+            "env": {},
+            "preLaunchTask": "build linux-amd64 debug"
         }
     ]
 }
