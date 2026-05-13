@@ -178,6 +178,7 @@ func TestRegexLong(t *testing.T) {
 	}
 
 	var output strings.Builder
+
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 
 	defer cancel()
@@ -255,6 +256,7 @@ func TestRegexiLong(t *testing.T) {
 	}
 
 	var output strings.Builder
+
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 
 	defer cancel()

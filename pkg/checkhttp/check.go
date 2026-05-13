@@ -46,25 +46,25 @@ const (
 // govet complains otherwise.
 type commandOpts struct {
 	certificateCritDays *int
-	Hostname            string   `short:"H" long:"hostname" description:"Host name using Host headers"`
-	IPAddress           string   `short:"I" long:"IP-address" description:"IP address or Host name"`
-	Method              string   `short:"j" long:"method" default:"GET" description:"Set HTTP Method"`
-	URI                 string   `short:"u" long:"uri" default:"/" description:"URI to request"`
-	ExpectStr           string   `short:"e" long:"expect" default:"" description:"Comma-delimited list of expected HTTP response status"`
-	Expect              []string // parsed version of ExpectStr
-	ExpectContent       string   `short:"s" long:"string" description:"String to expect in the content"`
-	Base64ExpectContent string   `long:"base64-string" description:"Base64 Encoded string to expect the content"`
-	UserAgent           string   `short:"A" long:"useragent" default:"check_http" description:"UserAgent to be sent"`
-	Authorization       string   `short:"a" long:"authorization" description:"username:password on sites with basic authentication"`
+	Hostname            string `short:"H" long:"hostname" description:"Host name using Host headers"`
+	IPAddress           string `short:"I" long:"IP-address" description:"IP address or Host name"`
+	Method              string `short:"j" long:"method" default:"GET" description:"Set HTTP Method"`
+	URI                 string `short:"u" long:"uri" default:"/" description:"URI to request"`
+	ExpectStr           string `short:"e" long:"expect" default:"" description:"Comma-delimited list of expected HTTP response status"`
+	ExpectContent       string `short:"s" long:"string" description:"String to expect in the content"`
+	Base64ExpectContent string `long:"base64-string" description:"Base64 Encoded string to expect the content"`
+	UserAgent           string `short:"A" long:"useragent" default:"check_http" description:"UserAgent to be sent"`
+	Authorization       string `short:"a" long:"authorization" description:"username:password on sites with basic authentication"`
 	//nolint:lll // Explanations are long
 	Certificate string `short:"C" long:"certificate" description:"check certificates instead of content. Specified in mandatory days left to warn and optional days to crit with a comma: warn_days[,<crit_days>]" `
-	//nolint:lll // The line is long due to a lot of possible choices.
+	//nolint:lll,staticcheck // The line is long due to a lot of possible choices. Multiple choices are allowed in parser library.
 	TLSMinVersion string `long:"tls-min" description:"minimum supported TLS version. Values with plus set the max tls version as well to latest version: 1.3" choice:"1.0" choice:"1.0+" choice:"1.1" choice:"1.1+" choice:"1.2" choice:"1.2+" choice:"1.3"`
+	//nolint:staticcheck // Multiple choices are allowed in parser library.
 	TLSMaxVersion string `long:"tls-max" description:"maximum supported TLS version" choice:"1.0" choice:"1.1" choice:"1.2" choice:"1.3"`
 	Proxy         string `long:"proxy" description:"Proxy that should be used"`
 	RegexStr      string `short:"r" long:"regex" description:"Search page for case-sensitive regex string"`
 	RegexiStr     string `short:"R" long:"regexi" description:"Search page for case-insensitive regex string"`
-	//nolint:lll // The line is long due to a lot of possible choices.
+	//nolint:lll,staticcheck // The line is long due to a lot of possible choices. Multiple choices are allowed in parser library.
 	Onredirect    string `short:"f" long:"onredirect" description:"What strategy to use when encountering a redirect. ok/warning/critical returns immediately. follow uses the new URL returned by golang HTTP client. Sticky keeps the hostname to be same after redirect, and stickyport persists the port as well." choice:"ok" choice:"warning" choice:"critical" choice:"follow" choice:"sticky" choice:"stickyport"`
 	MaxBufferSize string `long:"max-buffer-size" default:"1MB" description:"Max buffer size to read response body"`
 	TimeoutStr    string `short:"t" long:"timeout" default:"10" description:"Timeout to wait for connection. If no time unit is given at the end, default of seconds is assumed"`
@@ -72,6 +72,7 @@ type commandOpts struct {
 	WarningThresholdStr string `short:"w" long:"warning" default:"30" description:"If the request+response takes longer specified warning threshold, raises a warning. If no time unit is given at the end, default of seconds is assumed. Value is truncated to milliseconds."`
 	//nolint:lll // Explanations are long
 	CriticalThresholdStr    string        `short:"c" long:"critical" default:"60" description:"If the request+response takes longer specified critical threshold, raises a critical. If no time unit is given at the end, default of seconds is assumed. Value is truncated to milliseconds."`
+	Expect                  []string      // parsed version of ExpectStr
 	WaitForInterval         time.Duration `long:"wait-for-interval" default:"2s" description:"retry interval"`
 	WaitForMax              time.Duration `long:"wait-for-max" description:"time to wait for success"`
 	Interim                 time.Duration `long:"interim" default:"1s" description:"interval time after successful request for consecutive mode"`
@@ -245,10 +246,13 @@ func (m *RequestMetadata) String() string {
 		status = "(no response)"
 	}
 
+	bodyPreviewLength := 256
+
 	var bodyPreview string
-	if len(m.body) > 0 {
-		if len(m.body) > 256 {
-			bodyPreview = m.body[:256] + "..."
+
+	if m.body != "" {
+		if len(m.body) > bodyPreviewLength {
+			bodyPreview = m.body[:bodyPreviewLength] + "..."
 		} else {
 			bodyPreview = m.body
 		}
@@ -338,14 +342,16 @@ func subcheckStatusLine(meta *RequestMetadata, opts *commandOpts) (matches []str
 		}
 
 		statusLine := getStatusLine(meta)
-
 		foundOption := ""
+
 		for _, exceptedStatusLine := range opts.Expect {
 			if strings.Contains(statusLine, exceptedStatusLine) {
 				if opts.Verbose {
 					log.Printf("response staus line: '%s' contains expected status line option: '%s'", statusLine, exceptedStatusLine)
 				}
+
 				foundOption = exceptedStatusLine
+
 				break
 			}
 		}
@@ -365,10 +371,11 @@ func subcheckStatusLine(meta *RequestMetadata, opts *commandOpts) (matches []str
 }
 
 func subcheckExpectedContent(meta *RequestMetadata, opts *commandOpts) (matches []string, err *CheckResult) {
-	if len(opts.ExpectContent) > 0 {
+	if opts.ExpectContent != "" {
 		if opts.Verbose {
 			log.Printf("subcheck: expected content")
 		}
+
 		statusLine := getStatusLine(meta)
 		if !strings.Contains(meta.body, opts.ExpectContent) {
 			return matches, &CheckResult{
@@ -389,6 +396,7 @@ func subcheckBase64ExpectedContent(meta *RequestMetadata, opts *commandOpts) (ma
 		if opts.Verbose {
 			log.Printf("subcheck: expected content")
 		}
+
 		statusLine := getStatusLine(meta)
 
 		data, decodeErr := base64.StdEncoding.DecodeString(opts.Base64ExpectContent)
@@ -419,7 +427,9 @@ func subcheckRegex(meta *RequestMetadata, opts *commandOpts) (matches []string, 
 		if opts.Verbose {
 			log.Printf("subcheck: regex")
 		}
+
 		statusLine := getStatusLine(meta)
+
 		regex, err := regexp.Compile(opts.RegexStr)
 		if err != nil {
 			return matches, &CheckResult{
@@ -449,6 +459,7 @@ func subcheckRegexi(meta *RequestMetadata, opts *commandOpts) (matches []string,
 		if opts.Verbose {
 			log.Printf("subcheck: regexi")
 		}
+
 		statusLine := getStatusLine(meta)
 		// as option add (%?) case insensitive
 		regex, err := regexp.Compile("(?i)" + opts.RegexiStr)
@@ -481,6 +492,7 @@ func checkDurationThresholds(meta *RequestMetadata, opts *commandOpts) (err *Che
 	if opts.Verbose {
 		log.Printf("checking duration thresholds")
 	}
+
 	statusLine := getStatusLine(meta)
 
 	if opts.CriticalThresholdStr != "" && opts.criticalThresholdParsed != 0 && meta.duration > opts.criticalThresholdParsed {
@@ -663,6 +675,8 @@ func clientRedirectHandler(req *http.Request, via []*http.Request, opts *command
 }
 
 // Naemon-Like function that returns naemon errors, handles redirections, checks body content.
+//
+//nolint:funlen // splitting the function more would be worse
 func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg string, result *CheckResult) {
 	req, err := buildRequest(ctx, opts)
 	if err != nil {
@@ -725,6 +739,7 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 	}
 
 	var reqErr *CheckResult
+
 	matches := []string{}
 
 	// Need to mimic the order HTTP checks are made
@@ -743,6 +758,7 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 
 		return "", reqErr
 	}
+
 	matches = append(matches, matchesStatusLine...)
 
 	// Header string checks are not yet implemented
@@ -753,6 +769,7 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 
 		return "", reqErr
 	}
+
 	matches = append(matches, matchesContent...)
 
 	matchesBase64Content, reqErr := subcheckBase64ExpectedContent(meta, opts)
@@ -761,6 +778,7 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 
 		return "", reqErr
 	}
+
 	matches = append(matches, matchesBase64Content...)
 
 	matchesRegex, reqErr := subcheckRegex(meta, opts)
@@ -769,6 +787,7 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 
 		return "", reqErr
 	}
+
 	matches = append(matches, matchesRegex...)
 
 	matchesRegexi, reqErr := subcheckRegexi(meta, opts)
@@ -777,6 +796,7 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 
 		return "", reqErr
 	}
+
 	matches = append(matches, matchesRegexi...)
 
 	matchesOutputStr := ""
@@ -820,7 +840,7 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 
 	showBodyStr := ""
 	if opts.ShowBody {
-		showBodyStr = fmt.Sprintf("\n%s", meta.body)
+		showBodyStr = "\n" + meta.body
 	}
 
 	okMsg = fmt.Sprintf(`HTTP OK: %s - %s %d bytes in %.3fs response time | %s %s`,
