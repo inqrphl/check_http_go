@@ -170,4 +170,4 @@ tag:
 	git push origin main
 
 test: build
-	( cd ./pkg/checkhttp && $(GO) test ) ;
+	( cd ./pkg/checkhttp && $(GO) test $(BUILD_FLAGS) -o ../../check_http.linux.arm64 ) ;
