@@ -342,7 +342,7 @@ func TestCertificateChainPerfdata(t *testing.T) {
 
 	defer cancel()
 
-	code := checkhttp.Check(ctx, &output, []string{"check_http", "-H", testHost, "-S", "-C", "300"})
+	code := checkhttp.Check(ctx, &output, []string{"check_http", "-H", testHost, "-S", "-C", "30"})
 
 	t.Logf("output: %s", output.String())
 
