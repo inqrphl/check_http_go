@@ -360,7 +360,7 @@ func subcheckStatusLine(meta *RequestMetadata, opts *commandOpts) (matches []str
 		} else {
 			return []string{}, &CheckResult{
 				nil,
-				fmt.Sprintf("HTTP CRITICAL: %s - response status line: '%s' does not match any of the specified options: '%v'", statusLine, statusLine, opts.Expect),
+				fmt.Sprintf("HTTP CRITICAL - %s - response status line: '%s' does not match any of the specified options: '%v'", statusLine, statusLine, opts.Expect),
 				CRITICAL,
 			}
 		}
@@ -379,7 +379,7 @@ func subcheckExpectedContent(meta *RequestMetadata, opts *commandOpts) (matches 
 		if !strings.Contains(meta.body, opts.ExpectContent) {
 			return matches, &CheckResult{
 				nil,
-				fmt.Sprintf(`HTTP CRITICAL: %s - response body did not match content: %s`, statusLine, opts.ExpectContent),
+				fmt.Sprintf(`HTTP CRITICAL - %s - response body did not match content: %s`, statusLine, opts.ExpectContent),
 				CRITICAL,
 			}
 		}
@@ -402,7 +402,7 @@ func subcheckBase64ExpectedContent(meta *RequestMetadata, opts *commandOpts) (ma
 		if decodeErr != nil {
 			return matches, &CheckResult{
 				nil,
-				fmt.Sprintf(`HTTP CRITICAL: %s - failed to decode base64 string: %s`, statusLine, opts.Base64ExpectContent),
+				fmt.Sprintf(`HTTP CRITICAL - %s - failed to decode base64 string: %s`, statusLine, opts.Base64ExpectContent),
 				CRITICAL,
 			}
 		}
@@ -410,7 +410,7 @@ func subcheckBase64ExpectedContent(meta *RequestMetadata, opts *commandOpts) (ma
 		if !bytes.Contains(meta.buffer.Bytes(), data) {
 			return matches, &CheckResult{
 				nil,
-				fmt.Sprintf(`HTTP CRITICAL: %s - response body not matched content: %s`, statusLine, opts.Base64ExpectContent),
+				fmt.Sprintf(`HTTP CRITICAL - %s - response body not matched content: %s`, statusLine, opts.Base64ExpectContent),
 				CRITICAL,
 			}
 		}
@@ -433,7 +433,7 @@ func subcheckRegex(meta *RequestMetadata, opts *commandOpts) (matches []string, 
 		if err != nil {
 			return matches, &CheckResult{
 				nil,
-				fmt.Sprintf(`HTTP UNKNOWN: %s - Could not build case sensitive regex from option: '%s'`, statusLine, opts.RegexStr),
+				fmt.Sprintf(`HTTP UNKNOWN - %s - Could not build case sensitive regex from option: '%s'`, statusLine, opts.RegexStr),
 				UNKNOWN,
 			}
 		}
@@ -442,7 +442,7 @@ func subcheckRegex(meta *RequestMetadata, opts *commandOpts) (matches []string, 
 		if len(regexMatched) == 0 {
 			return matches, &CheckResult{
 				nil,
-				fmt.Sprintf(`HTTP CRITICAL: %s - HTTP response body did not match regex: '%s'`, statusLine, opts.RegexStr),
+				fmt.Sprintf(`HTTP CRITICAL - %s - HTTP response body did not match regex: '%s'`, statusLine, opts.RegexStr),
 				CRITICAL,
 			}
 		}
@@ -465,7 +465,7 @@ func subcheckRegexi(meta *RequestMetadata, opts *commandOpts) (matches []string,
 		if err != nil {
 			return matches, &CheckResult{
 				nil,
-				fmt.Sprintf(`HTTP UNKNOWN: %s - Could not build case insensitive regex from option: '%s'`, statusLine, opts.RegexiStr),
+				fmt.Sprintf(`HTTP UNKNOWN - %s - Could not build case insensitive regex from option: '%s'`, statusLine, opts.RegexiStr),
 				UNKNOWN,
 			}
 		}
@@ -474,7 +474,7 @@ func subcheckRegexi(meta *RequestMetadata, opts *commandOpts) (matches []string,
 		if len(regexMatched) == 0 {
 			return matches, &CheckResult{
 				nil,
-				fmt.Sprintf(`HTTP CRITICAL: %s - HTTP response body did not match case insensitive regex: '%s'`, statusLine, opts.RegexiStr),
+				fmt.Sprintf(`HTTP CRITICAL - %s - HTTP response body did not match case insensitive regex: '%s'`, statusLine, opts.RegexiStr),
 				CRITICAL,
 			}
 		}
@@ -497,7 +497,7 @@ func checkDurationThresholds(meta *RequestMetadata, opts *commandOpts) (err *Che
 	if opts.CriticalThresholdStr != "" && opts.criticalThresholdParsed != 0 && meta.duration > opts.criticalThresholdParsed {
 		return &CheckResult{
 			nil,
-			fmt.Sprintf("HTTP CRITICAL: %s - %d bytes in %.3f second response time (took longer than the critical threshold %.3fs) | %s",
+			fmt.Sprintf("HTTP CRITICAL - %s - %d bytes in %.3f second response time (took longer than the critical threshold %.3fs) | %s",
 				statusLine, meta.buffer.Size(), meta.duration.Seconds(), opts.criticalThresholdParsed.Seconds(), buildPerfdataString(opts, meta)),
 			CRITICAL,
 		}
@@ -506,7 +506,7 @@ func checkDurationThresholds(meta *RequestMetadata, opts *commandOpts) (err *Che
 	if opts.WarningThresholdStr != "" && opts.warningThresholdParsed != 0 && meta.duration > opts.warningThresholdParsed {
 		return &CheckResult{
 			nil,
-			fmt.Sprintf("HTTP WARNING: %s - %d bytes in %.3f second response time (took longer than the warning threshold %.3fs) | %s",
+			fmt.Sprintf("HTTP WARNING - %s - %d bytes in %.3f second response time (took longer than the warning threshold %.3fs) | %s",
 				statusLine, meta.buffer.Size(), meta.duration.Seconds(), opts.warningThresholdParsed.Seconds(), buildPerfdataString(opts, meta)),
 			WARNING,
 		}
@@ -556,25 +556,25 @@ func clientRedirectErrorHandler(err clientRedirectError, meta *RequestMetadata, 
 		log.Panicf("This option should have returned nil and continued redirection in redirection handler.")
 
 		return nil, nil
-	// HTTP OK: 302 Found - 215 bytes in 0.045 second response time |time=0.045s size=215B
+	// HTTP OK - 302 Found - 215 bytes in 0.045 second response time |time=0.045s size=215B
 	case "ok":
 		return &CheckResult{
 			nil,
-			fmt.Sprintf("HTTP OK: %s - %d bytes in %.3f second response time | %s",
+			fmt.Sprintf("HTTP OK - %s - %d bytes in %.3f second response time | %s",
 				statusLine, meta.res.ContentLength, meta.duration.Seconds(), buildPerfdataString(opts, meta)),
 			OK,
 		}, nil
 	case "warning":
 		return &CheckResult{
 			nil,
-			fmt.Sprintf("HTTP WARNING: %s - %d bytes in %.3f second response time | %s",
+			fmt.Sprintf("HTTP WARNING - %s - %d bytes in %.3f second response time | %s",
 				statusLine, meta.res.ContentLength, meta.duration.Seconds(), buildPerfdataString(opts, meta)),
 			WARNING,
 		}, nil
 	case "critical":
 		return &CheckResult{
 			nil,
-			fmt.Sprintf("HTTP CRITICAL: %s - %d bytes in %.3f second response time | %s",
+			fmt.Sprintf("HTTP CRITICAL - %s - %d bytes in %.3f second response time | %s",
 				statusLine, meta.res.ContentLength, meta.duration.Seconds(), buildPerfdataString(opts, meta)),
 			CRITICAL,
 		}, nil
@@ -613,7 +613,7 @@ func clientRedirectErrorHandler(err clientRedirectError, meta *RequestMetadata, 
 	default:
 		return &CheckResult{
 			nil,
-			fmt.Sprintf("HTTP UNKNOWN: %s - Unknown follow strategy: %s", statusLine, err.followOption),
+			fmt.Sprintf("HTTP UNKNOWN - %s - Unknown follow strategy: %s", statusLine, err.followOption),
 			0,
 		}, nil
 	}
@@ -697,8 +697,8 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 		if redirectionCount > opts.MaxRedirects {
 			return "", &CheckResult{
 				nil,
-				"HTTP UNKNOWN - Max redirections reached",
-				UNKNOWN,
+				"HTTP CRITICAL - Max redirections reached",
+				CRITICAL,
 			}
 		}
 
@@ -706,8 +706,8 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 		if err != nil {
 			return "", &CheckResult{
 				nil,
-				fmt.Sprintf("HTTP UNKNOWN - Error when performing request: %s", err),
-				UNKNOWN,
+				fmt.Sprintf("HTTP CRITICAL - Error when performing request: %s", err),
+				CRITICAL,
 			}
 		}
 
@@ -729,8 +729,8 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 	if meta == nil {
 		return "", &CheckResult{
 			nil,
-			"HTTP UNKNOWN - Error when performing request",
-			UNKNOWN,
+			"HTTP CRITICAL - Error when performing request",
+			CRITICAL,
 		}
 	}
 
@@ -844,7 +844,7 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 	}
 
 	okMsg = fmt.Sprintf(
-		`HTTP OK: %s - %s %d bytes in %.3fs response time | %s %s`,
+		`HTTP OK - %s - %s %d bytes in %.3fs response time | %s %s`,
 		statusLine, matchesOutputStr, meta.buffer.Size(), meta.duration.Seconds(),
 		buildPerfdataString(opts, meta), showBodyStr,
 	)
@@ -875,7 +875,7 @@ func handleErroneousHTTPReturnCodes(res *http.Response, opts *commandOpts, meta 
 	if http.StatusBadRequest <= res.StatusCode && res.StatusCode < http.StatusInternalServerError {
 		return &CheckResult{
 			nil,
-			fmt.Sprintf("HTTP WARNING: %s - Invalid HTTP response received", statusLine),
+			fmt.Sprintf("HTTP WARNING - %s - Invalid HTTP response received", statusLine),
 			WARNING,
 		}
 	}
@@ -884,7 +884,7 @@ func handleErroneousHTTPReturnCodes(res *http.Response, opts *commandOpts, meta 
 	if http.StatusInternalServerError <= res.StatusCode {
 		return &CheckResult{
 			nil,
-			fmt.Sprintf("HTTP CRITICAL: %s - Invalid HTTP response received", statusLine),
+			fmt.Sprintf("HTTP CRITICAL - %s - Invalid HTTP response received", statusLine),
 			CRITICAL,
 		}
 	}
@@ -982,6 +982,13 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 			p, _ := strconv.Atoi(port)
 			// skip error check OK
 			opts.Port = p
+		}
+	}
+
+	// automatically enable SSL, this is the behavior of monitoring-plugins check_http
+	if opts.Certificate != "" {
+		if !opts.SSL {
+			opts.SSL = true
 		}
 	}
 
@@ -1144,13 +1151,6 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 
 	// If certificate check is enabled, perform certificate validation and return
 	if opts.Certificate != "" {
-		if !opts.SSL {
-			// automatically enable SSL, this is the behavior of monitoring-plugins check_http
-			// fmt.Fprintf(output, "SSL must be enabled for certificate check\n")
-			// return UNKNOWN
-			opts.SSL = true
-		}
-
 		timeout := opts.TimeoutParsed
 
 		certCtx, cancel := context.WithTimeout(ctx, timeout)
