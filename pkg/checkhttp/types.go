@@ -64,7 +64,7 @@ func (pq *CheckResultPQ) Less(item1, item2 int) bool {
 	}
 
 	if (*pq)[item1].resultImportance != nil && (*pq)[item2].resultImportance != nil {
-		return *((*pq)[item1].resultImportance) < *((*pq)[item2].resultImportance)
+		return *(*pq)[item1].resultImportance < *(*pq)[item2].resultImportance
 	}
 
 	return true

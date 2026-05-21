@@ -261,7 +261,8 @@ func (m *RequestMetadata) String() string {
 		bodyPreview = "(empty)"
 	}
 
-	return fmt.Sprintf("RequestMetadata{duration: %v, status: %s, body_size: %d, body_preview: %q, redirects: %v}",
+	return fmt.Sprintf(
+		"RequestMetadata{duration: %v, status: %s, body_size: %d, body_preview: %q, redirects: %v}",
 		m.duration,
 		status,
 		m.buffer.Size(),
@@ -274,12 +275,10 @@ func (m *RequestMetadata) String() string {
 func performHTTPRequest(req *http.Request, client *http.Client, opts *commandOpts) (metadata *RequestMetadata, err error) {
 	if opts.Verbose {
 		reqDump, _ := httputil.DumpRequest(req, true)
-		//nolint:gosec // G706: Logging the request (which might leak secrets) is wanted by design in verbose mode
 		log.Printf("request:\n%s", reqDump)
 	}
 
 	start := time.Now()
-	//nolint:gosec // G704: Server side request forgery is flagged because req is built from CLI args. This is what the tool wants.
 	res, err := client.Do(req)
 	duration := time.Since(start).Truncate(time.Millisecond)
 
@@ -301,7 +300,6 @@ func performHTTPRequest(req *http.Request, client *http.Client, opts *commandOpt
 
 	if opts.Verbose {
 		resDump, _ := httputil.DumpResponse(res, true)
-		//nolint:gosec // G706: Logging the response (which might leak secrets) is wanted by design in verbose mode
 		log.Printf("response:\n%s", resDump)
 	}
 
@@ -634,7 +632,8 @@ func buildPerfdataString(opts *commandOpts, meta *RequestMetadata) string {
 		criticalThresholdStr = strconv.FormatFloat(opts.criticalThresholdParsed.Seconds(), 'f', 3, 64)
 	}
 
-	return fmt.Sprintf(`time=%ss;%s;%s;0; size=%dB;;;0;`,
+	return fmt.Sprintf(
+		`time=%ss;%s;%s;0; size=%dB;;;0;`,
 		durationStr,
 		warnThresholdStr,
 		criticalThresholdStr,
@@ -844,7 +843,8 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 		showBodyStr = "\n" + meta.body
 	}
 
-	okMsg = fmt.Sprintf(`HTTP OK: %s - %s %d bytes in %.3fs response time | %s %s`,
+	okMsg = fmt.Sprintf(
+		`HTTP OK: %s - %s %d bytes in %.3fs response time | %s %s`,
 		statusLine, matchesOutputStr, meta.buffer.Size(), meta.duration.Seconds(),
 		buildPerfdataString(opts, meta), showBodyStr,
 	)
@@ -892,7 +892,7 @@ func handleErroneousHTTPReturnCodes(res *http.Response, opts *commandOpts, meta 
 	return nil
 }
 
-//nolint:gocognit,cyclo,funlen,maintidx //the main function has a lot of argument parsing
+//nolint:gocognit,funlen,maintidx //the main function has a lot of argument parsing
 func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 	opts := commandOpts{}
 	psr := flags.NewParser(&opts, flags.HelpFlag|flags.PassDoubleDash) // default flags without flags.PrintErrors

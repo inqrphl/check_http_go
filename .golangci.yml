@@ -2,12 +2,15 @@ version: "2"
 linters:
   default: all
   disable:
-    - tagalign
-    - nonamedreturns
-    - exhaustruct
-    - wrapcheck
-    - err113
     - depguard
+    - err113
+    - exhaustruct
+    - goconst
+    - gomodguard
+    - nonamedreturns
+    - tagalign
+    - wrapcheck
+    - wsl
   settings:
     funlen:
       lines: 200
