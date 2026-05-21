@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"pkg/checkhttp"
+	"github.com/sni/check_http_go/pkg/checkhttp"
 )
 
 func main() {

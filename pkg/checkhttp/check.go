@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -12,160 +13,210 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/dustin/go-humanize"
 	"github.com/sni/go-flags"
 )
 
-const version = "0.020"
+const version = "0.3"
 
 const (
 	UNKNOWN  = 3
 	CRITICAL = 2
 	WARNING  = 1
-	OK       = 0
+	//nolint:varnamelen // it is simply short
+	OK = 0
 )
 
+const (
+	defaultKeepAliveSeconds       = 30
+	defaultIdleConnTimeoutSeconds = 30
+	defaultExpectContinueTimeoutSeconds
+	hoursInDays = 24
+)
+
+// this struct is big, order fields from big to small and avoid wasting space due to memory packing.
+// govet complains otherwise.
 type commandOpts struct {
-	Timeout       time.Duration `long:"timeout" default:"10s" description:"Timeout to wait for connection"`
-	MaxBufferSize string        `long:"max-buffer-size" default:"1MB" description:"Max buffer size to read response body"`
-	NoDiscard     bool          `long:"no-discard" description:"raise error when the response body is larger then max-buffer-size"`
-
-	Consecutive int           `long:"consecutive" default:"1" description:"number of consecutive successful requests required"`
-	Interim     time.Duration `long:"interim" default:"1s" description:"interval time after successful request for consecutive mode"`
-
-	WaitFor             bool          `long:"wait-for" description:"retry until successful when enabled"`
-	WaitForInterval     time.Duration `long:"wait-for-interval" default:"2s" description:"retry interval"`
-	WaitForMax          time.Duration `long:"wait-for-max" description:"time to wait for success"`
-	Hostname            string        `short:"H" long:"hostname" description:"Host name using Host headers"`
-	IPAddress           string        `short:"I" long:"IP-address" description:"IP address or Host name"`
-	Port                int           `short:"p" long:"port" description:"Port number"`
-	Method              string        `short:"j" long:"method" default:"GET" description:"Set HTTP Method"`
-	URI                 string        `short:"u" long:"uri" default:"/" description:"URI to request"`
-	Expect              string        `short:"e" long:"expect" default:"" description:"Comma-delimited list of expected HTTP response status"`
-	ExpectContent       string        `short:"s" long:"string" description:"String to expect in the content"`
-	Base64ExpectContent string        `long:"base64-string" description:"Base64 Encoded string to expect the content"`
-	UserAgent           string        `short:"A" long:"useragent" default:"check_http" description:"UserAgent to be sent"`
-	Authorization       string        `short:"a" long:"authorization" description:"username:password on sites with basic authentication"`
-	SSL                 bool          `short:"S" long:"ssl" description:"use https"`
-	SNI                 bool          `long:"sni" description:"enable SNI"`
-	TLSMaxVersion       string        `long:"tls-max" description:"maximum supported TLS version" choice:"1.0" choice:"1.1" choice:"1.2" choice:"1.3"`
-	TCP4                bool          `short:"4" description:"use tcp4 only"`
-	TCP6                bool          `short:"6" description:"use tcp6 only"`
-	Version             bool          `short:"V" long:"version" description:"Show version"`
-	Verbose             bool          `short:"v" long:"verbose" description:"Show verbose output"`
-	Proxy               string        `long:"proxy" description:"Proxy that should be used"`
-	bufferSize          uint64
-	expectByte          []byte
+	certificateCritDays *int
+	Hostname            string `short:"H" long:"hostname" description:"Host name using Host headers"`
+	IPAddress           string `short:"I" long:"IP-address" description:"IP address or Host name"`
+	Method              string `short:"j" long:"method" default:"GET" description:"Set HTTP Method"`
+	URI                 string `short:"u" long:"uri" default:"/" description:"URI to request"`
+	//nolint:lll // Explanations are long, what can I do
+	ExpectStr           string `short:"e" long:"expect" default:"" description:"Comma-delimited list of expected HTTP response status. By default, 1XX, 2XX are OK, 3XX depends on --onredirect option, 4XX are WARNING, 5XX are CRITICAL"`
+	ExpectContent       string `short:"s" long:"string" description:"String to expect in the content"`
+	Base64ExpectContent string `long:"base64-string" description:"Base64 Encoded string to expect the content"`
+	UserAgent           string `short:"A" long:"useragent" default:"check_http" description:"UserAgent to be sent"`
+	Authorization       string `short:"a" long:"authorization" description:"username:password on sites with basic authentication"`
+	//nolint:lll // Explanations are long
+	Certificate string `short:"C" long:"certificate" description:"check certificates instead of content. Specified in mandatory days left to warn and optional days to crit with a comma: warn_days[,<crit_days>]" `
+	//nolint:lll,staticcheck // The line is long due to a lot of possible choices. Multiple choices are allowed in parser library.
+	TLSMinVersion string `long:"tls-min" description:"minimum supported TLS version. Values with plus set the max tls version as well to latest version: 1.3" choice:"1.0" choice:"1.0+" choice:"1.1" choice:"1.1+" choice:"1.2" choice:"1.2+" choice:"1.3"`
+	//nolint:staticcheck // Multiple choices are allowed in parser library.
+	TLSMaxVersion string `long:"tls-max" description:"maximum supported TLS version" choice:"1.0" choice:"1.1" choice:"1.2" choice:"1.3"`
+	Proxy         string `long:"proxy" description:"Proxy that should be used"`
+	RegexStr      string `short:"r" long:"regex" description:"Search page for case-sensitive regex string"`
+	RegexiStr     string `short:"R" long:"regexi" description:"Search page for case-insensitive regex string"`
+	//nolint:lll,staticcheck // The line is long due to a lot of possible choices. Multiple choices are allowed in parser library.
+	Onredirect    string `short:"f" long:"onredirect" description:"What strategy to use when encountering a redirect. ok/warning/critical returns immediately. follow uses the new URL returned by golang HTTP client. Sticky keeps the hostname to be same after redirect, and stickyport persists the port as well." choice:"ok" choice:"warning" choice:"critical" choice:"follow" choice:"sticky" choice:"stickyport"`
+	MaxBufferSize string `long:"max-buffer-size" default:"1MB" description:"Max buffer size to read response body"`
+	TimeoutStr    string `short:"t" long:"timeout" default:"10" description:"Timeout to wait for connection. If no time unit is given at the end, default of seconds is assumed"`
+	//nolint:lll // Explanations are long
+	WarningThresholdStr string `short:"w" long:"warning" default:"30" description:"If the request+response takes longer specified warning threshold, raises a warning. If no time unit is given at the end, default of seconds is assumed. Value is truncated to milliseconds."`
+	//nolint:lll // Explanations are long
+	CriticalThresholdStr    string        `short:"c" long:"critical" default:"60" description:"If the request+response takes longer specified critical threshold, raises a critical. If no time unit is given at the end, default of seconds is assumed. Value is truncated to milliseconds."`
+	Expect                  []string      // parsed version of ExpectStr
+	WaitForInterval         time.Duration `long:"wait-for-interval" default:"2s" description:"retry interval"`
+	WaitForMax              time.Duration `long:"wait-for-max" description:"time to wait for success"`
+	Interim                 time.Duration `long:"interim" default:"1s" description:"interval time after successful request for consecutive mode"`
+	TimeoutParsed           time.Duration // parsed version of the timeoutStr after possibly appending time unit seconds
+	warningThresholdParsed  time.Duration // parsed version of the warningThreshold after possibly appending time unit seconds
+	criticalThresholdParsed time.Duration // parsed version of the warningThreshold after possibly appending time unit seconds
+	Consecutive             int           `long:"consecutive" default:"1" description:"number of consecutive successful requests required"`
+	Port                    int           `short:"p" long:"port" description:"Port number"`
+	certificateWarnDays     int
+	MaxRedirects            int `long:"max-redirs" description:"Maximum redirects before giving up on following"`
+	bufferSize              uint64
+	tlsMaxVersion           uint16
+	tlsMinVersion           uint16
+	NoDiscard               bool `long:"no-discard" description:"raise error when the response body is larger then max-buffer-size"`
+	WaitFor                 bool `long:"wait-for" description:"retry until successful when enabled"`
+	SSL                     bool `short:"S" long:"ssl" description:"use https"`
+	SNI                     bool `long:"sni" description:"enable SNI"`
+	TCP4                    bool `short:"4" description:"use tcp4 only"`
+	TCP6                    bool `short:"6" description:"use tcp6 only"`
+	Version                 bool `short:"V" long:"version" description:"Show version"`
+	Verbose                 bool `short:"v" long:"verbose" description:"Show verbose output"`
+	ShowBody                bool `long:"show-body" description:"Print body content below status line"`
+	IgnoreCertificateChain  bool `long:"ignore-certificate-chain" description:"by default all certificates are checked in many aspects. Toggle this option to only check the leaf (final) certificate."`
+	//nolint:lll // Explanations are long
+	DontIgnoreHostCN bool `long:"dont-ignore-host-cn" description:"Certificate subject's Common Name should matches the hostname. Common Name field is now largely unused in modern web, with Subject Alternative Name fields taking their place when present. It is ignored by default, use this flag to enable it."`
+	//nolint:lll // Explanations are long
+	IgnoreSAN                bool `long:"ignore-san" description:"Skip checking Subject Alternative Names against the hostname. SANs contain the hostnames and IP addresses this certificate is valid for."`
+	IgnoreNotAfter           bool `long:"ignore-not-after" description:"Certificates are invalid after the timestamp in their NotAfter has passed. This field can be ignored with this flag."`
+	IgnoreNotBefore          bool `long:"ignore-not-before" description:"Certificates are invalid before the timestamp in their NotBefore is reached. This field can be ignored with this flag."`
+	IgnoreSignatureAlgorithm bool `long:"ignore-signature-algorithm" description:"Some signature algorithms are deemed insecure, and are deprecated. The algorithm used can be ignored with this flag."`
 }
 
-func makeTransport(opts commandOpts) (http.RoundTripper, error) {
-	baseDialFunc := (&net.Dialer{
-		Timeout:   opts.Timeout,
-		KeepAlive: 30 * time.Second,
-		DualStack: true,
-	}).DialContext
-	tcpMode := "tcp"
-	if opts.TCP4 {
-		tcpMode = "tcp4"
-	}
-	if opts.TCP6 {
-		tcpMode = "tcp6"
-	}
-	dialFunc := func(ctx context.Context, _, _ string) (net.Conn, error) {
-		addr := net.JoinHostPort(opts.IPAddress, fmt.Sprintf("%d", opts.Port))
-		return baseDialFunc(ctx, tcpMode, addr)
-	}
-
-	tlsConfig := &tls.Config{
+func makeTLSConfig(opts *commandOpts) (conf *tls.Config) {
+	//nolint:gosec // TLS check is deliberately skipped, certificate checks are done in its separate function
+	conf = &tls.Config{
 		InsecureSkipVerify: true,
 	}
+
 	if opts.SNI {
 		host, _, err := net.SplitHostPort(opts.Hostname)
 		if err != nil {
 			host = opts.Hostname
 		}
-		tlsConfig.ServerName = host
+
+		conf.ServerName = host
 	}
 
-	if opts.TLSMaxVersion != "" {
-		switch opts.TLSMaxVersion {
-		case "1.0":
-			tlsConfig.MinVersion = tls.VersionTLS10
-			tlsConfig.MaxVersion = tls.VersionTLS10
-		case "1.1":
-			tlsConfig.MinVersion = tls.VersionTLS11
-			tlsConfig.MaxVersion = tls.VersionTLS11
-		case "1.2":
-			tlsConfig.MaxVersion = tls.VersionTLS12
-		case "1.3":
-			tlsConfig.MaxVersion = tls.VersionTLS13
-		}
+	if opts.tlsMinVersion != 0 {
+		conf.MinVersion = opts.tlsMinVersion
 	}
 
+	if opts.tlsMaxVersion != 0 {
+		conf.MaxVersion = opts.tlsMaxVersion
+	}
+
+	return conf
+}
+
+// net.Dialer is for creating a TCP connection.
+func makeDialer(opts *commandOpts) func(ctx context.Context, _ string, _ string) (net.Conn, error) {
+	baseDialFunc := (&net.Dialer{
+		Timeout:   opts.TimeoutParsed,
+		KeepAlive: defaultKeepAliveSeconds * time.Second,
+		DualStack: true,
+	}).DialContext
+
+	tcpMode := "tcp"
+	if opts.TCP4 {
+		tcpMode = "tcp4"
+	}
+
+	if opts.TCP6 {
+		tcpMode = "tcp6"
+	}
+
+	dialFunc := func(ctx context.Context, _, _ string) (net.Conn, error) {
+		addr := net.JoinHostPort(opts.IPAddress, strconv.Itoa(opts.Port))
+
+		return baseDialFunc(ctx, tcpMode, addr)
+	}
+
+	return dialFunc
+}
+
+//nolint:ireturn // it has to return an interface, http package is built that way
+func makeTransport(opts *commandOpts, dialFunc func(ctx context.Context, _ string, _ string) (net.Conn, error), tlsConfig *tls.Config) (http.RoundTripper, error) {
 	proxy := http.ProxyFromEnvironment
+
 	if opts.Proxy != "" {
-		url, err := url.Parse(opts.Proxy)
+		parsedURL, err := url.Parse(opts.Proxy)
 		if err != nil {
 			return nil, fmt.Errorf("Error while parsing Proxy URL. Error was: %s", err.Error())
 		}
-		proxy = http.ProxyURL(url)
+
+		proxy = http.ProxyURL(parsedURL)
 	}
 
 	return &http.Transport{
 		// inherited http.DefaultTransport
 		Proxy:                 proxy,
 		DialContext:           dialFunc,
-		IdleConnTimeout:       30 * time.Second,
-		TLSHandshakeTimeout:   opts.Timeout,
-		ExpectContinueTimeout: 1 * time.Second,
+		IdleConnTimeout:       defaultIdleConnTimeoutSeconds * time.Second,
+		TLSHandshakeTimeout:   opts.TimeoutParsed,
+		ExpectContinueTimeout: defaultExpectContinueTimeoutSeconds * time.Second,
 		// self-customized values
-		ResponseHeaderTimeout: opts.Timeout,
+		ResponseHeaderTimeout: opts.TimeoutParsed,
 		TLSClientConfig:       tlsConfig,
 		ForceAttemptHTTP2:     true,
 	}, nil
 }
 
-func buildRequest(ctx context.Context, opts commandOpts) (*http.Request, error) {
+func buildRequest(ctx context.Context, opts *commandOpts) (*http.Request, error) {
 	schema := "http"
 	if opts.SSL {
 		schema = "https"
 	}
 
 	uri := fmt.Sprintf("%s://%s%s", schema, opts.Hostname, opts.URI)
-	var b bytes.Buffer
+
+	var buffer bytes.Buffer
+
 	req, err := http.NewRequestWithContext(
 		ctx,
 		opts.Method,
 		uri,
-		&b,
+		&buffer,
 	)
 	if err != nil {
 		return nil, err
 	}
+
 	if opts.Authorization != "" {
 		a := strings.SplitN(opts.Authorization, ":", 2)
 		if len(a) != 2 {
-			return nil, fmt.Errorf("invalid authorization args")
+			return nil, errors.New("invalid authorization args")
 		}
+
 		req.SetBasicAuth(a[0], a[1])
 	}
-	req.Header.Set("User-Agent", opts.UserAgent)
-	return req, nil
-}
 
-func expectedStatusCode(opts commandOpts, status string) string {
-	expects := strings.Split(opts.Expect, ",")
-	for _, e := range expects {
-		if strings.Contains(status, e) {
-			return e
-		}
-	}
-	return ""
+	req.Header.Set("User-Agent", opts.UserAgent)
+
+	return req, nil
 }
 
 func printVersion(output io.Writer) {
@@ -175,146 +226,678 @@ func printVersion(output io.Writer) {
 		runtime.Version())
 }
 
-type capWriter struct {
-	Cap       uint64
-	NoDiscard bool
-	size      uint64
-	buffer    []byte
+type RequestMetadata struct {
+	req            *http.Request
+	res            *http.Response
+	buffer         *capWriter
+	redirectionErr *clientRedirectError
+	body           string
+	duration       time.Duration
 }
 
-func (w *capWriter) Write(p []byte) (int, error) {
-	w.size += uint64(len(p))
-	if w.size > w.Cap && w.NoDiscard {
-		return 0, fmt.Errorf("could not write body buffer. buffer is full")
+func (m *RequestMetadata) String() string {
+	if m == nil {
+		return "<nil RequestMetadata>"
 	}
 
-	if w.size > w.Cap {
-		q := w.Cap - uint64(len(w.buffer))
-		if q != 0 {
-			w.buffer = append(w.buffer, p[0:q-1]...)
+	var status string
+	if m.res != nil {
+		status = m.res.Status
+	} else {
+		status = "(no response)"
+	}
+
+	bodyPreviewLength := 256
+
+	var bodyPreview string
+
+	if m.body != "" {
+		if len(m.body) > bodyPreviewLength {
+			bodyPreview = m.body[:bodyPreviewLength] + "..."
+		} else {
+			bodyPreview = m.body
 		}
 	} else {
-		w.buffer = append(w.buffer, p...)
+		bodyPreview = "(empty)"
 	}
 
-	return len(p), nil
+	return fmt.Sprintf("RequestMetadata{duration: %v, status: %s, body_size: %d, body_preview: %q, redirects: %v}",
+		m.duration,
+		status,
+		m.buffer.Size(),
+		bodyPreview,
+		m.redirectionErr != nil,
+	)
 }
 
-func (w *capWriter) Size() uint64 {
-	return w.size
-}
-
-func (w *capWriter) Bytes() []byte {
-	return w.buffer
-}
-
-type reqError struct {
-	msg  string
-	code int
-}
-
-func (e *reqError) Error() string {
-	return e.msg
-}
-
-func (e *reqError) Code() int {
-	return e.code
-}
-
-func request(ctx context.Context, client *http.Client, opts commandOpts) (string, *reqError) {
-	req, err := buildRequest(ctx, opts)
-	if err != nil {
-		return "", &reqError{
-			fmt.Sprintf("Error in building request: %v", err),
-			UNKNOWN,
-		}
-	}
-
+// Helper function to extract everything from *http.Request.
+func performHTTPRequest(req *http.Request, client *http.Client, opts *commandOpts) (metadata *RequestMetadata, err error) {
 	if opts.Verbose {
 		reqDump, _ := httputil.DumpRequest(req, true)
+		//nolint:gosec // G706: Logging the request (which might leak secrets) is wanted by design in verbose mode
 		log.Printf("request:\n%s", reqDump)
 	}
 
 	start := time.Now()
+	//nolint:gosec // G704: Server side request forgery is flagged because req is built from CLI args. This is what the tool wants.
 	res, err := client.Do(req)
+	duration := time.Since(start).Truncate(time.Millisecond)
+
+	var redirectionErr *clientRedirectError
+
 	if err != nil {
-		return "", &reqError{
-			fmt.Sprintf("HTTP CRITICAL - Error in request: %v", err),
-			CRITICAL,
+		if urlErr, ok := errors.AsType[*url.Error](err); ok {
+			if clientRedirectErr, ok := errors.AsType[*clientRedirectError](urlErr.Err); ok {
+				// this is not really an error, we pack information into this error struct
+				// the code acts according to the chosen follow strategy
+				redirectionErr = clientRedirectErr
+			} else {
+				return nil, fmt.Errorf("error during request: %w", err)
+			}
+		} else {
+			return nil, fmt.Errorf("error during request: %w", err)
 		}
 	}
 
 	if opts.Verbose {
 		resDump, _ := httputil.DumpResponse(res, true)
+		//nolint:gosec // G706: Logging the response (which might leak secrets) is wanted by design in verbose mode
 		log.Printf("response:\n%s", resDump)
 	}
 
-	b := &capWriter{
-		Cap:       opts.bufferSize,
-		NoDiscard: opts.NoDiscard,
+	var (
+		buffer = &capWriter{Cap: opts.bufferSize, NoDiscard: opts.NoDiscard}
+		body   string
+	)
+
+	if redirectionErr == nil && res != nil && res.Body != nil {
+		writtenByteCount, ioCopyErr := io.Copy(buffer, res.Body)
+		defer res.Body.Close()
+
+		if ioCopyErr != nil {
+			return nil, fmt.Errorf("Error when copying request body buffer: %s , written bytes: %d", ioCopyErr.Error(), writtenByteCount)
+		}
+
+		body = string(buffer.Bytes())
 	}
-	defer res.Body.Close()
-	_, err = io.Copy(b, res.Body)
-	if err != nil {
-		return "", &reqError{
-			fmt.Sprintf("HTTP CRITICAL - Error in read response: %v", err),
+
+	// the returned err might be of type clientRedirectError
+	return &RequestMetadata{
+		req,
+		res,
+		buffer,
+		redirectionErr,
+		body,
+		duration,
+	}, nil
+}
+
+func getStatusLine(meta *RequestMetadata) string {
+	return fmt.Sprintf("%s %s", meta.req.Proto, meta.res.Status)
+}
+
+func subcheckStatusLine(meta *RequestMetadata, opts *commandOpts) (matches []string, err *CheckResult) {
+	if len(opts.Expect) > 0 {
+		if opts.Verbose {
+			log.Printf("subcheck: status line")
+		}
+
+		statusLine := getStatusLine(meta)
+		foundOption := ""
+
+		for _, exceptedStatusLine := range opts.Expect {
+			if strings.Contains(statusLine, exceptedStatusLine) {
+				if opts.Verbose {
+					log.Printf("response staus line: '%s' contains expected status line option: '%s'", statusLine, exceptedStatusLine)
+				}
+
+				foundOption = exceptedStatusLine
+
+				break
+			}
+		}
+
+		if foundOption != "" {
+			matches = append(matches, fmt.Sprintf(`response status line: '%s' matched option '%s'`, statusLine, foundOption))
+		} else {
+			return []string{}, &CheckResult{
+				nil,
+				fmt.Sprintf("HTTP CRITICAL: %s - response status line: '%s' does not match any of the specified options: '%v'", statusLine, statusLine, opts.Expect),
+				CRITICAL,
+			}
+		}
+	}
+
+	return matches, nil
+}
+
+func subcheckExpectedContent(meta *RequestMetadata, opts *commandOpts) (matches []string, err *CheckResult) {
+	if opts.ExpectContent != "" {
+		if opts.Verbose {
+			log.Printf("subcheck: expected content")
+		}
+
+		statusLine := getStatusLine(meta)
+		if !strings.Contains(meta.body, opts.ExpectContent) {
+			return matches, &CheckResult{
+				nil,
+				fmt.Sprintf(`HTTP CRITICAL: %s - response body did not match content: %s`, statusLine, opts.ExpectContent),
+				CRITICAL,
+			}
+		}
+
+		matches = append(matches, fmt.Sprintf("string: '%s'", opts.ExpectContent))
+	}
+
+	return matches, nil
+}
+
+func subcheckBase64ExpectedContent(meta *RequestMetadata, opts *commandOpts) (matches []string, err *CheckResult) {
+	if opts.Base64ExpectContent != "" {
+		if opts.Verbose {
+			log.Printf("subcheck: expected content")
+		}
+
+		statusLine := getStatusLine(meta)
+
+		data, decodeErr := base64.StdEncoding.DecodeString(opts.Base64ExpectContent)
+		if decodeErr != nil {
+			return matches, &CheckResult{
+				nil,
+				fmt.Sprintf(`HTTP CRITICAL: %s - failed to decode base64 string: %s`, statusLine, opts.Base64ExpectContent),
+				CRITICAL,
+			}
+		}
+
+		if !bytes.Contains(meta.buffer.Bytes(), data) {
+			return matches, &CheckResult{
+				nil,
+				fmt.Sprintf(`HTTP CRITICAL: %s - response body not matched content: %s`, statusLine, opts.Base64ExpectContent),
+				CRITICAL,
+			}
+		}
+
+		matches = append(matches, fmt.Sprintf("base64: '%s' , string: '%s'", opts.Base64ExpectContent, string(data)))
+	}
+
+	return matches, nil
+}
+
+func subcheckRegex(meta *RequestMetadata, opts *commandOpts) (matches []string, err *CheckResult) {
+	if opts.RegexStr != "" {
+		if opts.Verbose {
+			log.Printf("subcheck: regex")
+		}
+
+		statusLine := getStatusLine(meta)
+
+		regex, err := regexp.Compile(opts.RegexStr)
+		if err != nil {
+			return matches, &CheckResult{
+				nil,
+				fmt.Sprintf(`HTTP UNKNOWN: %s - Could not build case sensitive regex from option: '%s'`, statusLine, opts.RegexStr),
+				UNKNOWN,
+			}
+		}
+
+		regexMatched := regex.FindStringSubmatch(meta.body)
+		if len(regexMatched) == 0 {
+			return matches, &CheckResult{
+				nil,
+				fmt.Sprintf(`HTTP CRITICAL: %s - HTTP response body did not match regex: '%s'`, statusLine, opts.RegexStr),
+				CRITICAL,
+			}
+		}
+
+		matches = append(matches, fmt.Sprintf("regex: '%s' , matches: '%s'", opts.RegexStr, strings.Join(regexMatched, ",")))
+	}
+
+	return matches, nil
+}
+
+func subcheckRegexi(meta *RequestMetadata, opts *commandOpts) (matches []string, err *CheckResult) {
+	if opts.RegexiStr != "" {
+		if opts.Verbose {
+			log.Printf("subcheck: regexi")
+		}
+
+		statusLine := getStatusLine(meta)
+		// as option add (%?) case insensitive
+		regex, err := regexp.Compile("(?i)" + opts.RegexiStr)
+		if err != nil {
+			return matches, &CheckResult{
+				nil,
+				fmt.Sprintf(`HTTP UNKNOWN: %s - Could not build case insensitive regex from option: '%s'`, statusLine, opts.RegexiStr),
+				UNKNOWN,
+			}
+		}
+
+		regexMatched := regex.FindStringSubmatch(meta.body)
+		if len(regexMatched) == 0 {
+			return matches, &CheckResult{
+				nil,
+				fmt.Sprintf(`HTTP CRITICAL: %s - HTTP response body did not match case insensitive regex: '%s'`, statusLine, opts.RegexiStr),
+				CRITICAL,
+			}
+		}
+
+		matches = append(matches, fmt.Sprintf("regexi: '%s' , matches: '%s'", opts.RegexiStr, strings.Join(regexMatched, ",")))
+	}
+
+	return matches, nil
+}
+
+// the request+response duration is saved onto the metadata.
+// the command line arguments might have specified warning/critical thresholds to check against.
+func checkDurationThresholds(meta *RequestMetadata, opts *commandOpts) (err *CheckResult) {
+	if opts.Verbose {
+		log.Printf("checking duration thresholds")
+	}
+
+	statusLine := getStatusLine(meta)
+
+	if opts.CriticalThresholdStr != "" && opts.criticalThresholdParsed != 0 && meta.duration > opts.criticalThresholdParsed {
+		return &CheckResult{
+			nil,
+			fmt.Sprintf("HTTP CRITICAL: %s - %d bytes in %.3f second response time (took longer than the critical threshold %.3fs) | %s",
+				statusLine, meta.buffer.Size(), meta.duration.Seconds(), opts.criticalThresholdParsed.Seconds(), buildPerfdataString(opts, meta)),
 			CRITICAL,
 		}
 	}
 
-	duration := time.Since(start)
-	var matched []string
+	if opts.WarningThresholdStr != "" && opts.warningThresholdParsed != 0 && meta.duration > opts.warningThresholdParsed {
+		return &CheckResult{
+			nil,
+			fmt.Sprintf("HTTP WARNING: %s - %d bytes in %.3f second response time (took longer than the warning threshold %.3fs) | %s",
+				statusLine, meta.buffer.Size(), meta.duration.Seconds(), opts.warningThresholdParsed.Seconds(), buildPerfdataString(opts, meta)),
+			WARNING,
+		}
+	}
 
-	statusLine := fmt.Sprintf("%s %s", res.Proto, res.Status)
-	if opts.Expect != "" {
-		m := expectedStatusCode(opts, res.Status)
-		if m == "" {
-			return "", &reqError{
-				fmt.Sprintf("HTTP CRITICAL - Invalid HTTP response received from host on port %d: %s", opts.Port, statusLine),
-				CRITICAL,
+	return nil
+}
+
+type clientRedirectError struct {
+	redirectedReq *http.Request
+	followOption  string
+	originalHost  string
+	originalPort  int
+	stopRedirect  bool
+}
+
+func (e *clientRedirectError) Error() string {
+	str := fmt.Sprintf("clientRedirectHandlerError, this value encapsulates the follow command line option: '%s' .", e.followOption)
+
+	switch e.followOption {
+	case "":
+		str += "Follow option is not specified. This means following is not allowed."
+	case "follow":
+		str += "This uses the default behavior of go standard http package for redirections."
+	case "ok":
+		str += "This means that any redirection is an OK result."
+	case "warning":
+		str += "This means that any redirection is a WARNING result."
+	case "critical":
+		str += "This means that any redirection is a CRITICAL result."
+	case "sticky":
+		str += "This means that redirections are allowed, but the hostname/IP and the port is forced to stay the same."
+	case "stickyport":
+		str += "This means that redirections are allowed, but the hostname/IP and the port is forced to stay the same."
+	}
+
+	return str
+}
+
+func clientRedirectErrorHandler(err clientRedirectError, meta *RequestMetadata, opts *commandOpts) (checkResult *CheckResult, nextReq *http.Request) {
+	statusLine := getStatusLine(meta)
+
+	switch err.followOption {
+	case "":
+		return nil, nil
+	case "follow":
+		log.Panicf("This option should have returned nil and continued redirection in redirection handler.")
+
+		return nil, nil
+	// HTTP OK: 302 Found - 215 bytes in 0.045 second response time |time=0.045s size=215B
+	case "ok":
+		return &CheckResult{
+			nil,
+			fmt.Sprintf("HTTP OK: %s - %d bytes in %.3f second response time | %s",
+				statusLine, meta.res.ContentLength, meta.duration.Seconds(), buildPerfdataString(opts, meta)),
+			OK,
+		}, nil
+	case "warning":
+		return &CheckResult{
+			nil,
+			fmt.Sprintf("HTTP WARNING: %s - %d bytes in %.3f second response time | %s",
+				statusLine, meta.res.ContentLength, meta.duration.Seconds(), buildPerfdataString(opts, meta)),
+			WARNING,
+		}, nil
+	case "critical":
+		return &CheckResult{
+			nil,
+			fmt.Sprintf("HTTP CRITICAL: %s - %d bytes in %.3f second response time | %s",
+				statusLine, meta.res.ContentLength, meta.duration.Seconds(), buildPerfdataString(opts, meta)),
+			CRITICAL,
+		}, nil
+	case "sticky", "stickyport":
+		nextReq = err.redirectedReq
+
+		// http.Request ignores req.URL.Host is set
+
+		var origHost, origPortStr string
+
+		_, _, splitErr := net.SplitHostPort(err.originalHost)
+		if splitErr == nil {
+			origHost, origPortStr, _ = net.SplitHostPort(err.originalHost)
+			if origPortStr == "" {
+				// fallback to opts.Port logic
+				if opts.SSL {
+					origPortStr = "443"
+				} else {
+					origPortStr = "80"
+				}
 			}
-		} else {
-			matched = append(matched, fmt.Sprintf(`Status line output "%s" matched "%s"`, statusLine, opts.Expect))
+
+			switch err.followOption {
+			case "sticky":
+				// sticky: keep original host, follow redirect port
+				nextReq.URL.Host = net.JoinHostPort(origHost, nextReq.URL.Port())
+			case "stickyport":
+				// stickyport: keep both host and port
+				nextReq.URL.Host = net.JoinHostPort(origHost, origPortStr)
+			}
+		}
+
+		nextReq.Host = nextReq.URL.Hostname()
+
+		return nil, nextReq
+	default:
+		return &CheckResult{
+			nil,
+			fmt.Sprintf("HTTP UNKNOWN: %s - Unknown follow strategy: %s", statusLine, err.followOption),
+			0,
+		}, nil
+	}
+}
+
+func buildPerfdataString(opts *commandOpts, meta *RequestMetadata) string {
+	durationStr := strconv.FormatFloat(meta.duration.Seconds(), 'f', 3, 64)
+
+	var warnThresholdStr string
+	if opts.WarningThresholdStr != "" && opts.warningThresholdParsed != 0 {
+		warnThresholdStr = strconv.FormatFloat(opts.warningThresholdParsed.Seconds(), 'f', 3, 64)
+	}
+
+	var criticalThresholdStr string
+	if opts.CriticalThresholdStr != "" && opts.criticalThresholdParsed != 0 {
+		criticalThresholdStr = strconv.FormatFloat(opts.criticalThresholdParsed.Seconds(), 'f', 3, 64)
+	}
+
+	return fmt.Sprintf(`time=%ss;%s;%s;0; size=%dB;;;0;`,
+		durationStr,
+		warnThresholdStr,
+		criticalThresholdStr,
+		meta.buffer.Size(),
+	)
+}
+
+// if this function does not return an error, the redirection can continue
+// The arguments req and via are the upcoming request and the requests made already, oldest first.
+// This function is used to continue following, or encapsulate the follow strategy in an custom error type.
+func clientRedirectHandler(req *http.Request, via []*http.Request, opts *commandOpts) (err error) {
+	clientHandlerErr := &clientRedirectError{
+		followOption:  opts.Onredirect,
+		redirectedReq: req,
+	}
+	if len(via) > 0 {
+		clientHandlerErr.originalHost = via[0].URL.Host
+		if clientHandlerErr.originalHost == "" {
+			clientHandlerErr.originalHost = via[0].Host
 		}
 	} else {
-		switch {
-		case res.StatusCode >= 200 && res.StatusCode < 400:
-			matched = append(matched, statusLine)
-		case res.StatusCode >= 400 && res.StatusCode < 500:
-			return "", &reqError{
-				fmt.Sprintf("HTTP WARNING - Invalid HTTP response received from host on port %d: %s", opts.Port, statusLine),
-				WARNING,
-			}
-		default:
-			return "", &reqError{
-				fmt.Sprintf("HTTP CRITICAL - Invalid HTTP response received from host on port %d: %s", opts.Port, statusLine),
-				CRITICAL,
-			}
+		clientHandlerErr.originalHost = req.URL.Host // fallback
+	}
+
+	clientHandlerErr.originalPort = opts.Port
+
+	switch opts.Onredirect {
+	case "":
+		// following is not enabled by default
+		clientHandlerErr.stopRedirect = true
+	case "follow":
+		return nil
+	case "ok", "warning", "critical", "sticky", "stickyport":
+	default:
+		return fmt.Errorf("Unknown/Unsupported follow option: %s", opts.Onredirect)
+	}
+
+	return clientHandlerErr
+}
+
+// Naemon-Like function that returns naemon errors, handles redirections, checks body content.
+//
+//nolint:funlen // splitting the function more would be worse
+func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg string, result *CheckResult) {
+	req, err := buildRequest(ctx, opts)
+	if err != nil {
+		return "", &CheckResult{
+			nil,
+			fmt.Sprintf("Error in building request: %v", err),
+			UNKNOWN,
 		}
 	}
 
-	if len(opts.expectByte) > 0 {
-		if !bytes.Contains(b.Bytes(), opts.expectByte) {
-			return "", &reqError{
-				fmt.Sprintf(`HTTP CRITICAL - HTTP response body Not matched %q from host on port %d`, string(opts.expectByte), opts.Port),
-				CRITICAL,
+	var (
+		meta    *RequestMetadata
+		nextReq *http.Request
+	)
+	// first request is not a redirection , second is the first redirection
+	redirectionCount := -1
+	for req != nil {
+		if redirectionCount > opts.MaxRedirects {
+			return "", &CheckResult{
+				nil,
+				"HTTP UNKNOWN - Max redirections reached",
+				UNKNOWN,
 			}
-		} else {
-			matched = append(matched, fmt.Sprintf(`Response body matched %q`, string(opts.expectByte)))
+		}
+
+		meta, err = performHTTPRequest(req, client, opts)
+		if err != nil {
+			return "", &CheckResult{
+				nil,
+				fmt.Sprintf("HTTP UNKNOWN - Error when performing request: %s", err),
+				UNKNOWN,
+			}
+		}
+
+		if meta.redirectionErr != nil {
+			result, nextReq = clientRedirectErrorHandler(*meta.redirectionErr, meta, opts)
+		}
+
+		req = nextReq
+		redirectionCount++
+	}
+
+	// redirection might have given us a check result
+	// we should return this immediately
+	if result != nil {
+		return "", result
+	}
+
+	// sanity check
+	if meta == nil {
+		return "", &CheckResult{
+			nil,
+			"HTTP UNKNOWN - Error when performing request",
+			UNKNOWN,
 		}
 	}
 
-	b.Write([]byte(statusLine + "\r\n\r\n"))
-	res.Header.Write(b)
+	if opts.Verbose {
+		log.Printf("request metadata: %v", meta)
+	}
 
-	okMsg := fmt.Sprintf(`HTTP OK - %s - %d bytes in %.3f second response time | time=%fs;;;0.000000 size=%dB;;;0`, strings.Join(matched, ", "), b.Size(), duration.Seconds(), duration.Seconds(), b.Size())
+	var reqErr *CheckResult
+
+	matches := []string{}
+
+	// Need to mimic the order HTTP checks are made
+	// Status line check (--expect)
+	// Header string check (--header-string)
+	// Content string check (--string)
+	// Case-sensitive regex (--regex)
+	// Case-insensitive regex (--eregi)
+	// Page size check
+
+	// erroneus status codes check
+
+	matchesStatusLine, reqErr := subcheckStatusLine(meta, opts)
+	if reqErr != nil {
+		reqErr.msg += " | " + buildPerfdataString(opts, meta)
+
+		return "", reqErr
+	}
+
+	matches = append(matches, matchesStatusLine...)
+
+	// Header string checks are not yet implemented
+
+	matchesContent, reqErr := subcheckExpectedContent(meta, opts)
+	if reqErr != nil {
+		reqErr.msg += " | " + buildPerfdataString(opts, meta)
+
+		return "", reqErr
+	}
+
+	matches = append(matches, matchesContent...)
+
+	matchesBase64Content, reqErr := subcheckBase64ExpectedContent(meta, opts)
+	if reqErr != nil {
+		reqErr.msg += " | " + buildPerfdataString(opts, meta)
+
+		return "", reqErr
+	}
+
+	matches = append(matches, matchesBase64Content...)
+
+	matchesRegex, reqErr := subcheckRegex(meta, opts)
+	if reqErr != nil {
+		reqErr.msg += " | " + buildPerfdataString(opts, meta)
+
+		return "", reqErr
+	}
+
+	matches = append(matches, matchesRegex...)
+
+	matchesRegexi, reqErr := subcheckRegexi(meta, opts)
+	if reqErr != nil {
+		reqErr.msg += " | " + buildPerfdataString(opts, meta)
+
+		return "", reqErr
+	}
+
+	matches = append(matches, matchesRegexi...)
+
+	matchesOutputStr := ""
+	if len(matches) > 0 {
+		matchesOutputStr = fmt.Sprintf("Response body matched: [%s] - ", strings.Join(matches, ", "))
+	}
+
+	// Page size check is not yet implemented
+
+	reqErr = checkDurationThresholds(meta, opts)
+	if reqErr != nil {
+		return "", reqErr
+	}
+
+	reqErr = handleErroneousHTTPReturnCodes(meta.res, opts, meta)
+	if reqErr != nil {
+		reqErr.msg += " | " + buildPerfdataString(opts, meta)
+
+		return "", reqErr
+	}
+
+	statusLine := getStatusLine(meta)
+
+	_, err = meta.buffer.Write([]byte(statusLine + "\r\n\r\n"))
+	if err != nil {
+		return "", &CheckResult{
+			nil,
+			fmt.Sprintf("HTTP UNKNOWN - Error when writing statusLine to buffer: %s", err),
+			UNKNOWN,
+		}
+	}
+
+	err = meta.res.Header.Write(meta.buffer)
+	if err != nil {
+		return "", &CheckResult{
+			nil,
+			fmt.Sprintf("HTTP UNKNOWN - Error when writing header to buffer: %s", err),
+			UNKNOWN,
+		}
+	}
+
+	showBodyStr := ""
+	if opts.ShowBody {
+		showBodyStr = "\n" + meta.body
+	}
+
+	okMsg = fmt.Sprintf(`HTTP OK: %s - %s %d bytes in %.3fs response time | %s %s`,
+		statusLine, matchesOutputStr, meta.buffer.Size(), meta.duration.Seconds(),
+		buildPerfdataString(opts, meta), showBodyStr,
+	)
+
 	return okMsg, nil
 }
 
+// If the HTTP status code is erroneus, return a non-nil err.
+func handleErroneousHTTPReturnCodes(res *http.Response, opts *commandOpts, meta *RequestMetadata) (err *CheckResult) {
+	if len(opts.Expect) > 0 {
+		// if a statusLine is expected, HTTP error code checks are disabled
+		return nil
+	}
+
+	// 1xx (Informational)    → STATE_OK (success)
+	// 2xx (Success)          → STATE_OK (success)
+	// 3xx (Redirection)      → Depends on --onredirect setting
+	// 4xx (Client Error)     → STATE_WARNING
+	// 5xx (Server Error)     → STATE_CRITICAL
+	// < 100 or >= 600        → STATE_CRITICAL (invalid status code)
+
+	if opts.Verbose {
+		log.Printf("checking for erroneus HTTP return codes")
+	}
+
+	statusLine := fmt.Sprintf("%s %s", meta.res.Proto, meta.res.Status)
+	// Between 400 and 500
+	if http.StatusBadRequest <= res.StatusCode && res.StatusCode < http.StatusInternalServerError {
+		return &CheckResult{
+			nil,
+			fmt.Sprintf("HTTP WARNING: %s - Invalid HTTP response received", statusLine),
+			WARNING,
+		}
+	}
+
+	// Above 500
+	if http.StatusInternalServerError <= res.StatusCode {
+		return &CheckResult{
+			nil,
+			fmt.Sprintf("HTTP CRITICAL: %s - Invalid HTTP response received", statusLine),
+			CRITICAL,
+		}
+	}
+
+	return nil
+}
+
+//nolint:gocognit,cyclo,funlen,maintidx //the main function has a lot of argument parsing
 func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 	opts := commandOpts{}
 	psr := flags.NewParser(&opts, flags.HelpFlag|flags.PassDoubleDash) // default flags without flags.PrintErrors
 	psr.Name = "check_http"
+
 	_, err := psr.ParseArgs(osArgs)
 	if err != nil {
 		fmt.Fprintf(output, "%s\n", err.Error())
@@ -324,50 +907,59 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 
 	if opts.Version {
 		printVersion(output)
+
 		return OK
 	}
 
 	bufferSize, err := humanize.ParseBytes(opts.MaxBufferSize)
 	if err != nil {
 		fmt.Fprintf(output, "Could not parse max-buffer-size: %v\n", err)
+
 		return UNKNOWN
 	}
+
 	opts.bufferSize = bufferSize
 
 	if opts.WaitFor && opts.WaitForMax == 0 {
 		fmt.Fprintf(output, "wait-for-max is required when wait-for is enabled\n")
+
 		return UNKNOWN
+	}
+
+	if opts.ExpectStr != "" {
+		opts.Expect = strings.Split(opts.ExpectStr, ",")
 	}
 
 	if opts.ExpectContent != "" && opts.Base64ExpectContent != "" {
 		fmt.Fprintf(output, "Both string and base64-string are specified\n")
+
 		return UNKNOWN
 	}
 
-	if opts.ExpectContent != "" {
-		opts.expectByte = []byte(opts.ExpectContent)
-	}
 	if opts.Base64ExpectContent != "" {
-		data, err := base64.StdEncoding.DecodeString(opts.Base64ExpectContent)
-		if err != nil {
-			fmt.Fprintf(output, "Failed decode base64-string: %v\n", err)
+		_, decodeErr := base64.StdEncoding.DecodeString(opts.Base64ExpectContent)
+		if decodeErr != nil {
+			fmt.Fprintf(output, "Failed decode base64-string: %v\n", decodeErr)
+
 			return UNKNOWN
 		}
-		opts.expectByte = data
 	}
 
 	if opts.TCP4 && opts.TCP6 {
 		fmt.Fprintf(output, "Both tcp4 and tcp6 are specified\n")
+
 		return UNKNOWN
 	}
 
 	if opts.SNI && opts.Hostname == "" {
 		fmt.Fprintf(output, "hostname is required when use sni\n")
+
 		return UNKNOWN
 	}
 
 	if opts.Hostname == "" && opts.IPAddress == "" {
 		fmt.Fprintf(output, "Specify either hostname or ipaddress\n")
+
 		return UNKNOWN
 	}
 
@@ -376,8 +968,8 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 	}
 
 	if opts.IPAddress == "" {
-		host, _, err := net.SplitHostPort(opts.Hostname)
-		if err != nil {
+		host, _, splitErr := net.SplitHostPort(opts.Hostname)
+		if splitErr != nil {
 			opts.IPAddress = opts.Hostname
 		} else {
 			opts.IPAddress = host
@@ -385,8 +977,8 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 	}
 
 	if opts.Port == 0 {
-		_, port, err := net.SplitHostPort(opts.Hostname)
-		if err == nil {
+		_, port, splitErr := net.SplitHostPort(opts.Hostname)
+		if splitErr == nil {
 			p, _ := strconv.Atoi(port)
 			// skip error check OK
 			opts.Port = p
@@ -405,86 +997,278 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 		opts.URI = "/"
 	}
 
-	transport, err := makeTransport(opts)
+	if opts.MaxRedirects == 0 {
+		opts.MaxRedirects = 15
+	}
 
+	timeoutStrLastRune, _ := utf8.DecodeLastRuneInString(opts.TimeoutStr)
+	if unicode.IsDigit(timeoutStrLastRune) {
+		opts.TimeoutStr += "s"
+	}
+
+	var timeoutParseErr error
+
+	opts.TimeoutParsed, timeoutParseErr = time.ParseDuration(opts.TimeoutStr)
+	if timeoutParseErr != nil {
+		fmt.Fprintf(output, "Error parsing timeoutStr: %q , %s", opts.TimeoutStr, timeoutParseErr.Error())
+
+		return UNKNOWN
+	}
+
+	warningThresholdLastRune, _ := utf8.DecodeLastRuneInString(opts.WarningThresholdStr)
+	if unicode.IsDigit(warningThresholdLastRune) {
+		opts.WarningThresholdStr += "s"
+	}
+
+	var warningThresholdParseErr error
+
+	opts.warningThresholdParsed, warningThresholdParseErr = time.ParseDuration(opts.WarningThresholdStr)
+	if warningThresholdParseErr != nil {
+		fmt.Fprintf(output, "Error parsing warningThresholdStr: %q , %s", opts.WarningThresholdStr, warningThresholdParseErr.Error())
+
+		return UNKNOWN
+	}
+
+	opts.warningThresholdParsed = opts.warningThresholdParsed.Truncate(time.Millisecond)
+
+	criticalThresholdLastRune, _ := utf8.DecodeLastRuneInString(opts.CriticalThresholdStr)
+	if unicode.IsDigit(criticalThresholdLastRune) {
+		opts.CriticalThresholdStr += "s"
+	}
+
+	var criticalThresholdParseErr error
+
+	opts.criticalThresholdParsed, criticalThresholdParseErr = time.ParseDuration(opts.CriticalThresholdStr)
+	if criticalThresholdParseErr != nil {
+		fmt.Fprintf(output, "Error parsing criticalThresholdStr: %q , %s", opts.CriticalThresholdStr, criticalThresholdParseErr.Error())
+
+		return UNKNOWN
+	}
+
+	opts.criticalThresholdParsed = opts.criticalThresholdParsed.Truncate(time.Millisecond)
+
+	switch opts.TLSMinVersion {
+	// argument parser only accepts these values as valid
+	case "1.0":
+		opts.tlsMinVersion = tls.VersionTLS10
+	case "1.0+":
+		opts.tlsMinVersion = tls.VersionTLS10
+		opts.tlsMaxVersion = tls.VersionTLS13
+	case "1.1":
+		opts.tlsMinVersion = tls.VersionTLS11
+	case "1.1+":
+		opts.tlsMinVersion = tls.VersionTLS11
+		opts.tlsMaxVersion = tls.VersionTLS13
+	case "1.2":
+		opts.tlsMinVersion = tls.VersionTLS12
+	case "1.2+":
+		opts.tlsMinVersion = tls.VersionTLS12
+		opts.tlsMaxVersion = tls.VersionTLS13
+	case "1.3":
+		opts.tlsMinVersion = tls.VersionTLS13
+	}
+
+	switch opts.TLSMaxVersion {
+	// argument parser only accepts these values as valid
+	case "1.0":
+		opts.tlsMaxVersion = tls.VersionTLS10
+	case "1.1":
+		opts.tlsMaxVersion = tls.VersionTLS11
+	case "1.2":
+		opts.tlsMaxVersion = tls.VersionTLS12
+	case "1.3":
+		opts.tlsMaxVersion = tls.VersionTLS13
+	}
+
+	if opts.tlsMinVersion != 0 && opts.tlsMaxVersion != 0 && opts.tlsMinVersion > opts.tlsMaxVersion {
+		fmt.Fprintf(output, "TLS min version value is higher than TLS max version value, check your arguments.\n")
+
+		return UNKNOWN
+	}
+
+	if opts.Certificate != "" {
+		splits := strings.SplitN(opts.Certificate, ",", 2)
+
+		parseDays := func(str string) (int, error) {
+			var (
+				parsedInt int64
+				parseErr  error
+			)
+
+			if str == "" {
+				return 0, nil
+			}
+
+			parsedInt, parseErr = strconv.ParseInt(str, 10, 32)
+			if parseErr != nil {
+				return 0, parseErr
+			}
+
+			if parsedInt < 0 {
+				return 0, errors.New("days remaining cannot be a negative value")
+			}
+
+			return int(parsedInt), nil
+		}
+
+		warnDays, parseWarnErr := parseDays(splits[0])
+		if parseWarnErr != nil {
+			fmt.Fprintf(output, "Certificate check warning days could not be parsed: %s.\n", parseWarnErr.Error())
+
+			return UNKNOWN
+		}
+
+		opts.certificateWarnDays = warnDays
+
+		if len(splits) == 2 {
+			critDays, parseCritErr := parseDays(splits[1])
+			if parseCritErr != nil {
+				fmt.Fprintf(output, "Certificate check critical days could not be parsed: %s.\n", parseCritErr.Error())
+
+				return UNKNOWN
+			}
+
+			if critDays > warnDays {
+				fmt.Fprintf(output, "Certificate expiration date check: critical days cannot be higher than warning days.\n")
+
+				return UNKNOWN
+			}
+
+			opts.certificateCritDays = &critDays
+		}
+	}
+
+	// Build shared TLS config and dialer
+	tlsConfig := makeTLSConfig(&opts)
+	dialFunc := makeDialer(&opts)
+
+	// If certificate check is enabled, perform certificate validation and return
+	if opts.Certificate != "" {
+		if !opts.SSL {
+			// automatically enable SSL, this is the behavior of monitoring-plugins check_http
+			// fmt.Fprintf(output, "SSL must be enabled for certificate check\n")
+			// return UNKNOWN
+			opts.SSL = true
+		}
+
+		timeout := opts.TimeoutParsed
+
+		certCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+
+		certResult := checkCertificate(certCtx, output, &opts, dialFunc, tlsConfig)
+		fmt.Fprintf(output, "%s\n", certResult.Error())
+
+		return certResult.Code()
+	}
+
+	transport, err := makeTransport(&opts, dialFunc, tlsConfig)
 	if err != nil {
 		fmt.Fprintf(output, "Error in http configuration: %s\n", err.Error())
+
+		return UNKNOWN
 	}
 
 	client := &http.Client{
 		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
+			return clientRedirectHandler(req, via, &opts)
 		},
-		Timeout: opts.Timeout,
+		Timeout: opts.TimeoutParsed,
 	}
 
-	timeout := opts.Timeout + 3*time.Second
+	timeout := opts.TimeoutParsed
 	if opts.WaitForMax > 0 {
 		timeout = opts.WaitForMax
 	}
+
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	requestNum := 0
+
 	if opts.WaitFor {
 		consecutive := opts.Consecutive - 1
+
 		for ctx.Err() == nil {
 			requestNum++
-			okMsg, reqErr := request(ctx, client, opts)
+			okMsg, reqErr := request(ctx, client, &opts)
+
 			interval := opts.Interim
-			if reqErr == nil && consecutive <= 0 {
+
+			switch {
+			case reqErr == nil && consecutive <= 0:
 				if opts.Verbose {
 					log.Printf("request[%d]: %s", requestNum, okMsg)
 				}
-				fmt.Fprintf(output, okMsg)
+
+				fmt.Fprint(output, okMsg)
+
 				return OK
-			} else if reqErr == nil {
+			case reqErr == nil:
 				consecutive--
+
 				if opts.Verbose {
 					log.Printf("request[%d]: %s", requestNum, okMsg)
 				}
-			} else {
+			default:
 				interval = opts.WaitForInterval
+
 				consecutive = opts.Consecutive - 1
+
 				if opts.Verbose {
 					log.Printf("request[%d]: %s", requestNum, reqErr.Error())
 				}
 			}
+
 			select {
 			case <-ctx.Done():
 			case <-time.After(interval):
 			}
 		}
-		fmt.Fprintf(output, "Give up waiting for success\n")
+
+		fmt.Fprint(output, "Give up waiting for success\n")
+
 		return UNKNOWN
 	}
 
 	consecutive := opts.Consecutive - 1
-	var reqErr *reqError
+
+	var reqErr *CheckResult
+
+requestLoop:
 	for ctx.Err() == nil {
 		var okMsg string
+
 		requestNum++
-		okMsg, reqErr = request(ctx, client, opts)
-		if reqErr == nil && consecutive <= 0 {
+
+		okMsg, reqErr = request(ctx, client, &opts)
+		switch {
+		case reqErr == nil && consecutive <= 0:
 			if opts.Verbose {
 				log.Printf("request[%d]: %s", requestNum, okMsg)
 			}
-			fmt.Fprintf(output, okMsg)
+
+			fmt.Fprint(output, okMsg)
+
 			return OK
-		} else if reqErr == nil {
+		case reqErr == nil:
 			consecutive--
+
 			if opts.Verbose {
 				log.Printf("request[%d]: %s", requestNum, okMsg)
 			}
-		} else {
-			break
+		default:
+			break requestLoop
 		}
+
 		select {
 		case <-ctx.Done():
 		case <-time.After(opts.Interim):
 		}
 	}
-	fmt.Fprintf(output, reqErr.Error())
+
+	fmt.Fprint(output, reqErr.Error())
+
 	return reqErr.Code()
 }

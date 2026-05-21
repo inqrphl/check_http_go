@@ -1,0 +1,16 @@
+//go:build tools
+// +build tools
+
+package buildtools
+
+/*
+ * list of modules required to build and run all tests
+ * see: https://github.com/golang/go/wiki/Modules#how-can-i-track-tool-dependencies-for-a-module
+ */
+
+import (
+	_ "github.com/daixiang0/gci"
+	_ "github.com/golangci/golangci-lint/v2/cmd/golangci-lint"
+	_ "golang.org/x/tools/cmd/goimports"
+	_ "golang.org/x/vuln/cmd/govulncheck"
+)

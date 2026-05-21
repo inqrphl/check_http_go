@@ -1,0 +1,83 @@
+version: "2"
+linters:
+  default: all
+  disable:
+    - tagalign
+    - nonamedreturns
+    - exhaustruct
+    - wrapcheck
+    - err113
+    - depguard
+  settings:
+    funlen:
+      lines: 200
+      statements: 45
+    goconst:
+      min-len: 8
+      min-occurrences: 12
+    gocritic:
+      enabled-tags:
+        - performance
+        - style
+        - experimental
+    gocyclo:
+      min-complexity: 100
+    cyclop:
+      max-complexity: 100
+    gomoddirectives:
+      replace-local: true
+    nestif:
+      min-complexity: 10
+    mnd:
+      ignored-numbers:
+        - "2"
+    govet:
+      enable-all: true
+      settings:
+        printf:
+          funcs:
+            - Trace
+            - Tracef
+            - Debug
+            - Debugf
+            - Infof
+            - Info
+            - Warnf
+            - Warn
+            - Errorf
+            - Error
+            - Fatalf
+            - Fatal
+            - Criticalf
+            - Critical
+            - Panicf
+            - Panic
+            - LogStderrf
+    ireturn:
+      allow:
+        - error
+        - empty
+        - Module
+        - CheckHandler
+    lll:
+      line-length: 200
+    exhaustive:
+      default-signifies-exhaustive: true
+  exclusions:
+    #warn-unused: true
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax
