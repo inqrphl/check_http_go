@@ -100,7 +100,7 @@ type commandOpts struct {
 	//nolint:lll // Explanations are long
 	CheckCN bool `long:"check-cn" description:"Subject Common Name of leaf certificate can be checked to match hostname exactly. Common Name field is now largely unused in modern web, with Subject Alternative Name fields being more prelavent and used instead of Common Name when present. It is not checked by default, use this flag to enable it."`
 	//nolint:lll // Explanations are long
-	CheckSAN                 bool `long:"check-san" description:"Subject Alternative Names can be checked against the hostname. SANs contain the hostnames and IP addresses this certificate is valid for. They are ignored if the certificate is a Certificate Authority type, meaning they are used to sign other certificates and not for proving secuirty for a hostname. It is not checked by default, use this flag to enable it."`
+	CheckSAN                 bool `long:"check-san" description:"Subject Alternative Names can be checked against the hostname. SANs contain the hostnames and IP addresses this certificate is valid for. They are ignored if the certificate is a Certificate Authority type, meaning they are used to sign other certificates and not for proving security for a hostname. It is not checked by default, use this flag to enable it."`
 	IgnoreNotAfter           bool `long:"ignore-not-after" description:"Certificates are invalid after the timestamp in their NotAfter has passed. This field can be ignored with this flag."`
 	IgnoreNotBefore          bool `long:"ignore-not-before" description:"Certificates are invalid before the timestamp in their NotBefore is reached. This field can be ignored with this flag."`
 	IgnoreSignatureAlgorithm bool `long:"ignore-signature-algorithm" description:"Some signature algorithms are deemed insecure, and are deprecated. The algorithm used can be ignored with this flag."`
@@ -275,12 +275,10 @@ func (m *RequestMetadata) String() string {
 func performHTTPRequest(req *http.Request, client *http.Client, opts *commandOpts) (metadata *RequestMetadata, err error) {
 	if opts.Verbose {
 		reqDump, _ := httputil.DumpRequest(req, true)
-		//nolint:gosec // G706: Logging the request (which might leak secrets) is wanted by design in verbose mode
 		log.Printf("request:\n%s", reqDump)
 	}
 
 	start := time.Now()
-	//nolint:gosec // G704: Server side request forgery is flagged because req is built from CLI args. This is what the tool wants.
 	res, err := client.Do(req)
 	duration := time.Since(start).Truncate(time.Millisecond)
 
@@ -302,7 +300,6 @@ func performHTTPRequest(req *http.Request, client *http.Client, opts *commandOpt
 
 	if opts.Verbose {
 		resDump, _ := httputil.DumpResponse(res, true)
-		//nolint:gosec // G706: Logging the response (which might leak secrets) is wanted by design in verbose mode
 		log.Printf("response:\n%s", resDump)
 	}
 

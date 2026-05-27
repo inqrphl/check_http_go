@@ -72,7 +72,7 @@ Application Options:
                                                                   flag to enable it.
       --check-san                                                 Subject Alternative Names can be checked against the hostname. SANs contain the hostnames and IP
                                                                   addresses this certificate is valid for. They are ignored if the certificate is a Certificate
-                                                                  Authority type, meaning they are used to sign other certificates and not for proving secuirty for
+                                                                  Authority type, meaning they are used to sign other certificates and not for proving security for
                                                                   a hostname. It is not checked by default, use this flag to enable it.
       --ignore-not-after                                          Certificates are invalid after the timestamp in their NotAfter has passed. This field can be
                                                                   ignored with this flag.
