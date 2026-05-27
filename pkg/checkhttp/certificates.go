@@ -115,12 +115,11 @@ func checkCertificateChain(output io.Writer, opts *commandOpts, certs []*x509.Ce
 		if shouldCheck {
 			perfParts = append(perfParts, fmt.Sprintf("days_chain_elem%d=%dd;%d;%s;0", perfIndex, daysLeft, opts.certificateWarnDays, critDaysPerfStr))
 
-			// The flag is false by default, it has to be manually toggled
-			if opts.DontIgnoreHostCN {
+			if opts.CheckCN {
 				pushCommonNameCheck(cert, matchHostname, perfIndex, resultsPQ)
 			}
 
-			if !opts.IgnoreSAN {
+			if opts.CheckSAN {
 				pushSubjectAlternativeNameCheck(cert, matchHostname, perfIndex, resultsPQ)
 			}
 
