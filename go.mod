@@ -7,4 +7,4 @@ require (
 	github.com/sni/go-flags v0.0.0-20241025124417-5e271e4d4cc9
 )
 
-require golang.org/x/sys v0.43.0 // indirect
+require golang.org/x/sys v0.44.0 // indirect

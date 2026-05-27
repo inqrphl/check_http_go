@@ -1,0 +1,25 @@
+name: citest
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v6
+    - name: Install Go
+      uses: actions/setup-go@v6
+      with:
+        go-version-file: './go.mod'
+    - run: make clean
+    - run: make citest
+    - run: make
+    - name: extract built binary
+      uses: actions/upload-artifact@v7
+      with:
+        name: check_http
+        path: check_http

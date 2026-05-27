@@ -88,17 +88,17 @@ build-linux-i386: vendor
 		( cd ./cmd/$$CMD && GOOS=linux GOARCH=386 CGO_ENABLED=0 $(GO) build $(BUILD_FLAGS) -o ../../$$CMD.linux.i386 ) ; \
 	done
 
-build-windows-i386: vendor rsrc_windows_386.syso
+build-windows-i386: vendor
 	set -e; for CMD in $(CMDS); do \
 		( cd ./cmd/$$CMD && GOOS=windows GOARCH=386 CGO_ENABLED=0 $(GO) build $(BUILD_FLAGS) -o ../../$$CMD.windows.i386.exe ) ; \
 	done
 
-build-windows-amd64: vendor rsrc_windows_amd64.syso
+build-windows-amd64: vendor
 	set -e; for CMD in $(CMDS); do \
 		( cd ./cmd/$$CMD && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 $(GO) build $(BUILD_FLAGS) -o ../../$$CMD.windows.amd64.exe ) ; \
 	done
 
-build-windows-arm64: vendor rsrc_windows_arm64.syso
+build-windows-arm64: vendor
 	set -e; for CMD in $(CMDS); do \
 		( cd ./cmd/$$CMD && GOOS=windows GOARCH=arm64 CGO_ENABLED=0 $(GO) build $(BUILD_FLAGS) -o ../../$$CMD.windows.arm64.exe ) ; \
 	done
@@ -118,10 +118,50 @@ build-darwin-aarch64: vendor
 		( cd ./cmd/$$CMD && GOOS=darwin GOARCH=arm64 CGO_ENABLED=$(shell if [ "$(GOOS)" != "darwin" ]; then echo "0"; else echo $(CGO_ENABLED); fi ) $(GO) build $(BUILD_FLAGS) -o ../../$$CMD.darwin.aarch64 ) ; \
 	done
 
+citest: tools vendor
+	#
+	# Checking gofmt errors
+	#
+	if [ $$(gofmt -s -l ./cmd/ ./pkg/ | wc -l) -gt 0 ]; then \
+		echo "found format errors in these files:"; \
+		gofmt -s -l ./cmd/ ./pkg/ ; \
+		exit 1; \
+	fi
+	#
+	# Checking TODO items
+	#
+	if grep -Irn TODO: ./cmd/ ./pkg/ ./packaging/ ; then exit 1; fi
+	#
+	# Checking remaining debug calls
+	#
+	if grep -Irn Dump ./cmd/ ./pkg/ | grep -v dump.go | grep -v DumpRe | grep -v ThreadDump | grep -v reqDump | grep -v resDump; then exit 1; fi
+	#
+	# Run other subtests
+	#
+	$(MAKE) golangci
+	-$(MAKE) govulncheck
+	$(MAKE) fmt
+	#
+	# Normal test cases
+	#
+	$(MAKE) test
+	#
+	# Test cross compilation
+	#
+	$(MAKE) build-linux-amd64
+	$(MAKE) build-windows-amd64
+	$(MAKE) build-windows-i386
+	$(MAKE) build-freebsd-i386
+	$(MAKE) build-darwin-aarch64
+	#
+	# All CI tests successful
+	#
+
+
 clean:
-	set -e; for CMD in $(CMDS); do \
-		rm -f ./cmd/$$CMD/$$CMD; \
-	done
+	rm -rf $(TOOLSFOLDER)
+	rm -rf ./check_http
+	rm -rf ./check_http.*
 
 GOVET=$(GO) vet -all
 SRCFOLDER=./cmd/. ./pkg/. ./buildtools/.
