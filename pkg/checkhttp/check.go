@@ -98,9 +98,9 @@ type commandOpts struct {
 	ShowBody                bool `long:"show-body" description:"Print body content below status line"`
 	IgnoreCertificateChain  bool `long:"ignore-certificate-chain" description:"by default all certificates are checked in many aspects. Toggle this option to only check the leaf (final) certificate."`
 	//nolint:lll // Explanations are long
-	DontIgnoreHostCN bool `long:"dont-ignore-host-cn" description:"Certificate subject's Common Name should matches the hostname. Common Name field is now largely unused in modern web, with Subject Alternative Name fields taking their place when present. It is ignored by default, use this flag to enable it."`
+	CheckCN bool `long:"check-cn" description:"Subject Common Name of leaf certificate can be checked to match hostname exactly. Common Name field is now largely unused in modern web, with Subject Alternative Name fields being more prelavent and used instead of Common Name when present. It is not checked by default, use this flag to enable it."`
 	//nolint:lll // Explanations are long
-	IgnoreSAN                bool `long:"ignore-san" description:"Skip checking Subject Alternative Names against the hostname. SANs contain the hostnames and IP addresses this certificate is valid for."`
+	CheckSAN                 bool `long:"check-san" description:"Subject Alternative Names can be checked against the hostname. SANs contain the hostnames and IP addresses this certificate is valid for. They are ignored if the certificate is a Certificate Authority type, meaning they are used to sign other certificates and not for proving security for a hostname. It is not checked by default, use this flag to enable it."`
 	IgnoreNotAfter           bool `long:"ignore-not-after" description:"Certificates are invalid after the timestamp in their NotAfter has passed. This field can be ignored with this flag."`
 	IgnoreNotBefore          bool `long:"ignore-not-before" description:"Certificates are invalid before the timestamp in their NotBefore is reached. This field can be ignored with this flag."`
 	IgnoreSignatureAlgorithm bool `long:"ignore-signature-algorithm" description:"Some signature algorithms are deemed insecure, and are deprecated. The algorithm used can be ignored with this flag."`
