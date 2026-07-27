@@ -113,7 +113,7 @@ func checkCertificateChain(output io.Writer, opts *commandOpts, certs []*x509.Ce
 		daysLeft := int(time.Until(expiry).Hours() / hoursInDays)
 
 		if shouldCheck {
-			perfParts = append(perfParts, fmt.Sprintf("days_chain_elem%d=%dd;%d;%s;0", perfIndex, daysLeft, opts.certificateWarnDays, critDaysPerfStr))
+			perfParts = append(perfParts, fmt.Sprintf("days_chain_elem%d=%d;%d;%s;0", perfIndex, daysLeft, opts.certificateWarnDays, critDaysPerfStr))
 
 			if opts.CheckCN {
 				pushCommonNameCheck(cert, matchHostname, perfIndex, resultsPQ)
@@ -136,7 +136,7 @@ func checkCertificateChain(output io.Writer, opts *commandOpts, certs []*x509.Ce
 				pushSignatureCheck(cert, perfIndex, resultsPQ)
 			}
 		} else {
-			perfParts = append(perfParts, fmt.Sprintf("days_chain_elem%d=%dd;;;0", perfIndex, daysLeft))
+			perfParts = append(perfParts, fmt.Sprintf("days_chain_elem%d=%d;;;0", perfIndex, daysLeft))
 		}
 	}
 
