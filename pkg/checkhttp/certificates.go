@@ -6,7 +6,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"io"
 	"net"
 	"strconv"
 	"strings"
@@ -26,7 +25,7 @@ const (
 
 // checkCertificate establishes a TLS connection to the server and validates the certificate against the warning and critical thresholds.
 // It returns immediately without checking the HTTP content.
-func checkCertificate(ctx context.Context, output io.Writer, opts *commandOpts, dialFunc func(ctx context.Context, _ string, _ string) (net.Conn, error), tlsConfig *tls.Config) *CheckResult {
+func checkCertificate(ctx context.Context, opts *commandOpts, dialFunc func(ctx context.Context, _ string, _ string) (net.Conn, error), tlsConfig *tls.Config) *CheckResult {
 	// For certificate checking, we need to set ServerName for SNI
 	if tlsConfig.ServerName == "" {
 		host, _, err := net.SplitHostPort(opts.Hostname)
@@ -72,14 +71,14 @@ func checkCertificate(ctx context.Context, output io.Writer, opts *commandOpts, 
 	// certs[n] is the root certificate. this is either from the web browser / system
 	// use a dedicated function to check the chain, the logic is too long
 
-	return checkCertificateChain(output, opts, certs)
+	return checkCertificateChain(opts, certs)
 }
 
 // The main inspiration is from https://github.com/matteocorti/check_ssl_cert.
 // That project has many options, this function implements only a subset of them.
 //
 //nolint:gocognit,funlen // the function logic is simple
-func checkCertificateChain(output io.Writer, opts *commandOpts, certs []*x509.Certificate) *CheckResult {
+func checkCertificateChain(opts *commandOpts, certs []*x509.Certificate) *CheckResult {
 	// OK - Certificate 'se1-mon-q001.sys.schwarz' will expire on Sat 27 May 2028 04:55:09 PM GMT +0000 (expires in X days)
 	const customTimeLayout = "Mon 02 Jan 2006 03:04:05 PM MST -0700"
 
@@ -116,15 +115,15 @@ func checkCertificateChain(output io.Writer, opts *commandOpts, certs []*x509.Ce
 			perfParts = append(perfParts, fmt.Sprintf("days_chain_elem%d=%d;%d;%s;0", perfIndex, daysLeft, opts.certificateWarnDays, critDaysPerfStr))
 
 			if opts.CheckCN {
-				pushCommonNameCheck(cert, matchHostname, perfIndex, resultsPQ)
+				pushCommonNameCheck(cert, matchHostname, perfIndex, resultsPQ, opts)
 			}
 
 			if opts.CheckSAN {
-				pushSubjectAlternativeNameCheck(cert, matchHostname, perfIndex, resultsPQ)
+				pushSubjectAlternativeNameCheck(cert, matchHostname, perfIndex, resultsPQ, opts)
 			}
 
 			if !opts.IgnoreNotBefore {
-				pushNotBeforeCheck(cert, perfIndex, customTimeLayout, resultsPQ)
+				pushNotBeforeCheck(cert, perfIndex, customTimeLayout, resultsPQ, opts)
 			}
 
 			if !opts.IgnoreNotAfter {
@@ -133,7 +132,7 @@ func checkCertificateChain(output io.Writer, opts *commandOpts, certs []*x509.Ce
 
 			if !opts.IgnoreSignatureAlgorithm {
 				// Signature algorithm check.
-				pushSignatureCheck(cert, perfIndex, resultsPQ)
+				pushSignatureCheck(cert, perfIndex, resultsPQ, opts)
 			}
 		} else {
 			perfParts = append(perfParts, fmt.Sprintf("days_chain_elem%d=%d;;;0", perfIndex, daysLeft))
@@ -158,7 +157,7 @@ func checkCertificateChain(output io.Writer, opts *commandOpts, certs []*x509.Ce
 				importanceStr = strconv.FormatInt(int64(*subcheck.resultImportance), 10)
 			}
 
-			fmt.Fprintf(output, "subcheck %d\ncode: %d | importance: %s | msg: %s\n", sIdx, subcheck.code, importanceStr, subcheck.msg)
+			opts.tracef("subcheck %d | code: %d | importance: %s | msg: %s", sIdx, subcheck.code, importanceStr, subcheck.msg)
 		}
 	}
 
@@ -307,7 +306,7 @@ func toLowerCaseASCII(in string) string {
 	return string(out)
 }
 
-func pushCommonNameCheck(cert *x509.Certificate, hostname string, index int, resultsPQ *CheckResultPQ) {
+func pushCommonNameCheck(cert *x509.Certificate, hostname string, index int, resultsPQ *CheckResultPQ, opts *commandOpts) {
 	resultImportance := index*resultImportancePerLevel + commonNameImportance
 
 	if cert.IsCA {
@@ -329,6 +328,8 @@ func pushCommonNameCheck(cert *x509.Certificate, hostname string, index int, res
 				formatCertSubject(cert), cert.Subject.CommonName),
 			CRITICAL,
 		})
+
+		opts.tracef("certificate check: CN invalid pattern for cert %s", formatCertSubject(cert))
 	}
 
 	cnMatchesHostname := matchHostnames(cert.Subject.CommonName, hostname)
@@ -339,6 +340,8 @@ func pushCommonNameCheck(cert *x509.Certificate, hostname string, index int, res
 				formatCertSubject(cert), cert.Subject.CommonName, hostname),
 			CRITICAL,
 		})
+
+		opts.tracef("certificate check: CN %q does not match hostname %q for cert %s", cert.Subject.CommonName, hostname, formatCertSubject(cert))
 	}
 
 	heap.Push(resultsPQ, &CheckResult{
@@ -351,7 +354,7 @@ func pushCommonNameCheck(cert *x509.Certificate, hostname string, index int, res
 
 // pushSubjectAlternativeNameCheck verifies that the certificate's IP or DNS SAN names
 // match the expected hostname (or SNI name).
-func pushSubjectAlternativeNameCheck(cert *x509.Certificate, hostname string, index int, resultsPQ *CheckResultPQ) {
+func pushSubjectAlternativeNameCheck(cert *x509.Certificate, hostname string, index int, resultsPQ *CheckResultPQ, opts *commandOpts) {
 	resultImportance := index*resultImportancePerLevel + subjectAlternativeNameImportance
 
 	if cert.IsCA {
@@ -376,6 +379,8 @@ func pushSubjectAlternativeNameCheck(cert *x509.Certificate, hostname string, in
 				formatCertSubject(cert), hostname, cert.IPAddresses, cert.DNSNames),
 			CRITICAL,
 		})
+
+		opts.tracef("certificate check: SANs do not match hostname %q for cert %s", hostname, formatCertSubject(cert))
 
 		return
 	}
@@ -403,6 +408,8 @@ func pushNotAfterCheck(cert *x509.Certificate, opts *commandOpts, index int, tim
 				formatCertSubject(cert), expiry.Format(timeLayout), daysLeft),
 			CRITICAL,
 		})
+
+		opts.tracef("certificate check: cert %s expires in %d days (critical)", formatCertSubject(cert), daysLeft)
 	case daysLeft <= opts.certificateWarnDays:
 		heap.Push(resultsPQ, &CheckResult{
 			&resultImportance,
@@ -410,6 +417,8 @@ func pushNotAfterCheck(cert *x509.Certificate, opts *commandOpts, index int, tim
 				formatCertSubject(cert), expiry.Format(timeLayout), daysLeft),
 			WARNING,
 		})
+
+		opts.tracef("certificate check: cert %s expires in %d days (warning)", formatCertSubject(cert), daysLeft)
 	default:
 		heap.Push(resultsPQ, &CheckResult{
 			&resultImportance,
@@ -421,7 +430,7 @@ func pushNotAfterCheck(cert *x509.Certificate, opts *commandOpts, index int, tim
 }
 
 // pushSignatureCheck validates that the certificate is not signed using a weak algorithm.
-func pushSignatureCheck(cert *x509.Certificate, index int, resultsPQ *CheckResultPQ) {
+func pushSignatureCheck(cert *x509.Certificate, index int, resultsPQ *CheckResultPQ, opts *commandOpts) {
 	resultImportance := index*resultImportancePerLevel + signatureImportanceLevel
 
 	sigAlgo := cert.SignatureAlgorithm.String()
@@ -434,6 +443,8 @@ func pushSignatureCheck(cert *x509.Certificate, index int, resultsPQ *CheckResul
 				formatCertSubject(cert), sigAlgo),
 			CRITICAL,
 		})
+
+		opts.tracef("certificate check: cert %s uses weak signature algorithm %s", formatCertSubject(cert), sigAlgo)
 	case x509.SHA1WithRSA:
 		heap.Push(resultsPQ, &CheckResult{
 			&resultImportance,
@@ -441,6 +452,8 @@ func pushSignatureCheck(cert *x509.Certificate, index int, resultsPQ *CheckResul
 				formatCertSubject(cert), sigAlgo),
 			WARNING,
 		})
+
+		opts.tracef("certificate check: cert %s uses deprecated SHA1 signature %s", formatCertSubject(cert), sigAlgo)
 	default:
 		heap.Push(resultsPQ, &CheckResult{
 			&resultImportance,
@@ -452,7 +465,7 @@ func pushSignatureCheck(cert *x509.Certificate, index int, resultsPQ *CheckResul
 }
 
 // pushNotBeforeCheck verifies the certificate is not used before its validity period begins.
-func pushNotBeforeCheck(cert *x509.Certificate, index int, timeLayout string, resultsPQ *CheckResultPQ) {
+func pushNotBeforeCheck(cert *x509.Certificate, index int, timeLayout string, resultsPQ *CheckResultPQ, opts *commandOpts) {
 	resultImportance := index*resultImportancePerLevel + notBeforeImportanceLevel
 
 	notBefore := cert.NotBefore
@@ -463,6 +476,8 @@ func pushNotBeforeCheck(cert *x509.Certificate, index int, timeLayout string, re
 				formatCertSubject(cert), notBefore.Format(timeLayout)),
 			CRITICAL,
 		})
+
+		opts.tracef("certificate check: cert %s validity starts in the future: %s", formatCertSubject(cert), notBefore.Format(timeLayout))
 
 		return
 	}
