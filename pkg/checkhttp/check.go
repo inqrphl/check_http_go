@@ -1162,7 +1162,7 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 		certCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 
-		certResult := checkCertificate(certCtx, output, &opts, dialFunc, tlsConfig)
+		certResult := checkCertificate(certCtx, &opts, dialFunc, tlsConfig)
 		fmt.Fprintf(output, "%s\n", certResult.Error())
 
 		return certResult.Code()
