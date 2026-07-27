@@ -22,6 +22,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/dustin/go-humanize"
+	"github.com/kdar/factorlog"
 	"github.com/sni/go-flags"
 )
 
@@ -104,6 +105,18 @@ type commandOpts struct {
 	IgnoreNotAfter           bool `long:"ignore-not-after" description:"Certificates are invalid after the timestamp in their NotAfter has passed. This field can be ignored with this flag."`
 	IgnoreNotBefore          bool `long:"ignore-not-before" description:"Certificates are invalid before the timestamp in their NotBefore is reached. This field can be ignored with this flag."`
 	IgnoreSignatureAlgorithm bool `long:"ignore-signature-algorithm" description:"Some signature algorithms are deemed insecure, and are deprecated. The algorithm used can be ignored with this flag."`
+	log                      *factorlog.FactorLog
+}
+
+func (opts *commandOpts) tracef(format string, args ...interface{}) {
+	if !opts.Verbose {
+		return
+	}
+	if opts.log != nil {
+		opts.log.Tracef(format, args...)
+	} else {
+		log.Printf(format, args...)
+	}
 }
 
 func makeTLSConfig(opts *commandOpts) (conf *tls.Config) {
@@ -275,7 +288,7 @@ func (m *RequestMetadata) String() string {
 func performHTTPRequest(req *http.Request, client *http.Client, opts *commandOpts) (metadata *RequestMetadata, err error) {
 	if opts.Verbose {
 		reqDump, _ := httputil.DumpRequest(req, true)
-		log.Printf("request:\n%s", reqDump)
+		opts.tracef("request:\n%s", reqDump)
 	}
 
 	start := time.Now()
@@ -300,7 +313,7 @@ func performHTTPRequest(req *http.Request, client *http.Client, opts *commandOpt
 
 	if opts.Verbose {
 		resDump, _ := httputil.DumpResponse(res, true)
-		log.Printf("response:\n%s", resDump)
+		opts.tracef("response:\n%s", resDump)
 	}
 
 	var (
@@ -336,18 +349,14 @@ func getStatusLine(meta *RequestMetadata) string {
 
 func subcheckStatusLine(meta *RequestMetadata, opts *commandOpts) (matches []string, err *CheckResult) {
 	if len(opts.Expect) > 0 {
-		if opts.Verbose {
-			log.Printf("subcheck: status line")
-		}
+		opts.tracef("subcheck: status line")
 
 		statusLine := getStatusLine(meta)
 		foundOption := ""
 
 		for _, exceptedStatusLine := range opts.Expect {
 			if strings.Contains(statusLine, exceptedStatusLine) {
-				if opts.Verbose {
-					log.Printf("response staus line: '%s' contains expected status line option: '%s'", statusLine, exceptedStatusLine)
-				}
+				opts.tracef("response staus line: '%s' contains expected status line option: '%s'", statusLine, exceptedStatusLine)
 
 				foundOption = exceptedStatusLine
 
@@ -371,9 +380,7 @@ func subcheckStatusLine(meta *RequestMetadata, opts *commandOpts) (matches []str
 
 func subcheckExpectedContent(meta *RequestMetadata, opts *commandOpts) (matches []string, err *CheckResult) {
 	if opts.ExpectContent != "" {
-		if opts.Verbose {
-			log.Printf("subcheck: expected content")
-		}
+		opts.tracef("subcheck: expected content")
 
 		statusLine := getStatusLine(meta)
 		if !strings.Contains(meta.body, opts.ExpectContent) {
@@ -392,9 +399,7 @@ func subcheckExpectedContent(meta *RequestMetadata, opts *commandOpts) (matches 
 
 func subcheckBase64ExpectedContent(meta *RequestMetadata, opts *commandOpts) (matches []string, err *CheckResult) {
 	if opts.Base64ExpectContent != "" {
-		if opts.Verbose {
-			log.Printf("subcheck: expected content")
-		}
+		opts.tracef("subcheck: expected content")
 
 		statusLine := getStatusLine(meta)
 
@@ -423,9 +428,7 @@ func subcheckBase64ExpectedContent(meta *RequestMetadata, opts *commandOpts) (ma
 
 func subcheckRegex(meta *RequestMetadata, opts *commandOpts) (matches []string, err *CheckResult) {
 	if opts.RegexStr != "" {
-		if opts.Verbose {
-			log.Printf("subcheck: regex")
-		}
+		opts.tracef("subcheck: regex")
 
 		statusLine := getStatusLine(meta)
 
@@ -455,9 +458,7 @@ func subcheckRegex(meta *RequestMetadata, opts *commandOpts) (matches []string, 
 
 func subcheckRegexi(meta *RequestMetadata, opts *commandOpts) (matches []string, err *CheckResult) {
 	if opts.RegexiStr != "" {
-		if opts.Verbose {
-			log.Printf("subcheck: regexi")
-		}
+		opts.tracef("subcheck: regexi")
 
 		statusLine := getStatusLine(meta)
 		// as option add (%?) case insensitive
@@ -488,9 +489,7 @@ func subcheckRegexi(meta *RequestMetadata, opts *commandOpts) (matches []string,
 // the request+response duration is saved onto the metadata.
 // the command line arguments might have specified warning/critical thresholds to check against.
 func checkDurationThresholds(meta *RequestMetadata, opts *commandOpts) (err *CheckResult) {
-	if opts.Verbose {
-		log.Printf("checking duration thresholds")
-	}
+	opts.tracef("checking duration thresholds")
 
 	statusLine := getStatusLine(meta)
 
@@ -734,9 +733,7 @@ func request(ctx context.Context, client *http.Client, opts *commandOpts) (okMsg
 		}
 	}
 
-	if opts.Verbose {
-		log.Printf("request metadata: %v", meta)
-	}
+	opts.tracef("request metadata: %v", meta)
 
 	var reqErr *CheckResult
 
@@ -866,9 +863,7 @@ func handleErroneousHTTPReturnCodes(res *http.Response, opts *commandOpts, meta 
 	// 5xx (Server Error)     → STATE_CRITICAL
 	// < 100 or >= 600        → STATE_CRITICAL (invalid status code)
 
-	if opts.Verbose {
-		log.Printf("checking for erroneus HTTP return codes")
-	}
+	opts.tracef("checking for erroneus HTTP return codes")
 
 	statusLine := fmt.Sprintf("%s %s", meta.res.Proto, meta.res.Status)
 	// Between 400 and 500
@@ -892,6 +887,13 @@ func handleErroneousHTTPReturnCodes(res *http.Response, opts *commandOpts, meta 
 	return nil
 }
 
+const (
+	// if this check is used in snclient, try to get its logger from the context.
+	// prefer snclients logger over the default logger if its present
+	// snclient packs the logger in the context using this key
+	snclientLoggerContextKey string = "github.com/consol-monitoring/snclient/pkg/utils.Logger"
+)
+
 //nolint:gocognit,funlen,maintidx //the main function has a lot of argument parsing
 func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 	opts := commandOpts{}
@@ -904,6 +906,10 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 
 		return UNKNOWN
 	}
+
+	loggerCastOk := false
+	opts.log, loggerCastOk = ctx.Value(snclientLoggerContextKey).(*factorlog.FactorLog)
+	opts.tracef("extracting logger from context using snclient logger specific key result: %t", loggerCastOk)
 
 	if opts.Version {
 		printVersion(output)
@@ -1198,9 +1204,7 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 
 			switch {
 			case reqErr == nil && consecutive <= 0:
-				if opts.Verbose {
-					log.Printf("request[%d]: %s", requestNum, okMsg)
-				}
+				opts.tracef("request[%d]: %s", requestNum, okMsg)
 
 				fmt.Fprint(output, okMsg)
 
@@ -1208,17 +1212,13 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 			case reqErr == nil:
 				consecutive--
 
-				if opts.Verbose {
-					log.Printf("request[%d]: %s", requestNum, okMsg)
-				}
+				opts.tracef("request[%d]: %s", requestNum, okMsg)
 			default:
 				interval = opts.WaitForInterval
 
 				consecutive = opts.Consecutive - 1
 
-				if opts.Verbose {
-					log.Printf("request[%d]: %s", requestNum, reqErr.Error())
-				}
+				opts.tracef("request[%d]: %s", requestNum, reqErr.Error())
 			}
 
 			select {
@@ -1245,9 +1245,7 @@ requestLoop:
 		okMsg, reqErr = request(ctx, client, &opts)
 		switch {
 		case reqErr == nil && consecutive <= 0:
-			if opts.Verbose {
-				log.Printf("request[%d]: %s", requestNum, okMsg)
-			}
+			opts.tracef("request[%d]: %s", requestNum, okMsg)
 
 			fmt.Fprint(output, okMsg)
 
@@ -1255,9 +1253,7 @@ requestLoop:
 		case reqErr == nil:
 			consecutive--
 
-			if opts.Verbose {
-				log.Printf("request[%d]: %s", requestNum, okMsg)
-			}
+			opts.tracef("request[%d]: %s", requestNum, okMsg)
 		default:
 			break requestLoop
 		}
