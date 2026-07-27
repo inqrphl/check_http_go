@@ -46,6 +46,7 @@ const (
 // this struct is big, order fields from big to small and avoid wasting space due to memory packing.
 // govet complains otherwise.
 type commandOpts struct {
+	log                 *factorlog.FactorLog
 	certificateCritDays *int
 	Hostname            string `short:"H" long:"hostname" description:"Host name using Host headers"`
 	IPAddress           string `short:"I" long:"IP-address" description:"IP address or Host name"`
@@ -105,13 +106,13 @@ type commandOpts struct {
 	IgnoreNotAfter           bool `long:"ignore-not-after" description:"Certificates are invalid after the timestamp in their NotAfter has passed. This field can be ignored with this flag."`
 	IgnoreNotBefore          bool `long:"ignore-not-before" description:"Certificates are invalid before the timestamp in their NotBefore is reached. This field can be ignored with this flag."`
 	IgnoreSignatureAlgorithm bool `long:"ignore-signature-algorithm" description:"Some signature algorithms are deemed insecure, and are deprecated. The algorithm used can be ignored with this flag."`
-	log                      *factorlog.FactorLog
 }
 
-func (opts *commandOpts) tracef(format string, args ...interface{}) {
+func (opts *commandOpts) tracef(format string, args ...any) {
 	if !opts.Verbose {
 		return
 	}
+
 	if opts.log != nil {
 		opts.log.Tracef(format, args...)
 	} else {
@@ -889,8 +890,8 @@ func handleErroneousHTTPReturnCodes(res *http.Response, opts *commandOpts, meta 
 
 const (
 	// if this check is used in snclient, try to get its logger from the context.
-	// prefer snclients logger over the default logger if its present
-	// snclient packs the logger in the context using this key
+	// prefer snclients logger over the default logger if its present.
+	// snclient packs the logger in the context using this key.
 	snclientLoggerContextKey string = "github.com/consol-monitoring/snclient/pkg/utils.Logger"
 )
 
@@ -907,7 +908,8 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 		return UNKNOWN
 	}
 
-	loggerCastOk := false
+	var loggerCastOk bool
+
 	opts.log, loggerCastOk = ctx.Value(snclientLoggerContextKey).(*factorlog.FactorLog)
 	opts.tracef("extracting logger from context using snclient logger specific key result: %t", loggerCastOk)
 
