@@ -35,7 +35,7 @@
             "preLaunchTask": "build linux-amd64 debug"
         },
         {
-            "name": "check_http -v --hostname mail.google.com --follow follow --timeout 1000000s",
+            "name": "check_http -v --hostname mail.google.com --onredirect follow --timeout 1000000s",
             "type": "go",
             "request": "launch",
             "mode": "exec",
@@ -44,7 +44,7 @@
                 "-v",
                 "--hostname",
                 "mail.google.com",
-                "--follow",
+                "--onredirect",
                 "follow",
                 "--timeout",
                 "1000000s"
@@ -53,7 +53,7 @@
             "preLaunchTask": "build linux-amd64 debug"
         },
         {
-            "name": "check_http -v --hostname mail.google.com --follow ok --timeout 1000000s",
+            "name": "check_http -v --hostname mail.google.com --onredirect ok --timeout 1000000s",
             "type": "go",
             "request": "launch",
             "mode": "exec",
@@ -62,7 +62,7 @@
                 "-v",
                 "--hostname",
                 "mail.google.com",
-                "--follow",
+                "--onredirect",
                 "ok",
                 "--timeout",
                 "1000000s"
@@ -71,7 +71,7 @@
             "preLaunchTask": "build linux-amd64 debug"
         },
         {
-            "name": "check_http -v --hostname mail.google.com --follow sticky --timeout 1000000s",
+            "name": "check_http -v --hostname mail.google.com --onredirect sticky --timeout 1000000s",
             "type": "go",
             "request": "launch",
             "mode": "exec",
@@ -80,7 +80,7 @@
                 "-v",
                 "--hostname",
                 "mail.google.com",
-                "--follow",
+                "--onredirect",
                 "sticky",
                 "--timeout",
                 "1000000s"
