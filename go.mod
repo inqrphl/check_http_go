@@ -7,4 +7,10 @@ require (
 	github.com/sni/go-flags v0.0.0-20241025124417-5e271e4d4cc9
 )
 
-require golang.org/x/sys v0.44.0 // indirect
+require (
+	github.com/kdar/factorlog v0.0.0-20211012144011-6ea75a169038 // indirect
+	github.com/mattn/go-colorable v0.1.15 // indirect
+	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/mgutz/ansi v0.0.0-20200706080929-d51e80ef957d // indirect
+	golang.org/x/sys v0.44.0 // indirect
+)
